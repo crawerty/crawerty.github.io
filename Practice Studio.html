@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head> 
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="style.css"/>
+    <title><i>OnSight Music - Practice Studio</i></title>
+</head>
+<body>
+    <section class ="nav.box" id="Nav"> 
+        <section class="practice.box" id="Practice Studio">
+    <h1><i>OnSight Music Presents: </i></h1>
+    <h2><i>OnSight Practice Studio&trade;</i></h2>
+    </section> 
+    <nav>
+        <a href="index.html">Home</a>
+        <a href="#Practice Studio">Practice Studio</a>
+    </nav>
+    </section>
+    <section class="uploadFile" id="uploadFile">
+        <h3>Upload Your MIDI File</h3>
+        <input type="file" id="midiFile" accept=".mid, .midi, audio/midi" />
+        <p>Please upload a MIDI file (.mid) of any piece of music.</p>
+    </section>
+
+    <section class="metronome" id="Metronome">
+        <h3>Metronome</h3>
+        <label for="bpm">BPM:</label>
+        <div id="staff"></div>
+        <input type="number" id="bpm" value="100"/>
+        <button id="startMetronome">Start Metronome</button>
+        <button id="stopMetronome">Stop Metronome</button>
+    </section>
+    <section class="controls" id="Controls"> 
+  <button id="record"> Start Recording </button>
+  <button id="stop" disabled> Stop Recording </button>
+  <br>
+  <h3>Your Recording:</h3>
+  <br>
+  <audio id="player" controls></audio>
+
+  <script type="module" src="script.js"></script>
+    </section>
+</body>
+</html>
