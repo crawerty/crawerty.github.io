@@ -163,6 +163,7 @@ async function processAndRender() {
   midiBpm = bpm; // store bpm for metronome
   const convertedNotes = await convertAllNotes();
   drawStaff(convertedNotes);
+  document.getElementById("bpm").value = Math.round(midiBpm);
 }
 
 function drawStaff(notes) {
