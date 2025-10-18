@@ -1,6 +1,6 @@
 import Vex from "https://cdn.skypack.dev/vexflow";
 import { Midi } from "https://cdn.skypack.dev/@tonejs/midi";
-import { PitchDetector } from 'https://esm.sh/pitchy';
+// import { PitchDetector } from 'https://esm.sh/pitchy'; // Not used currently
 const recordBtn = document.getElementById("record");
 const stopBtn = document.getElementById("stop");
 const player = document.getElementById("player");
@@ -159,6 +159,7 @@ async function convertAllNotes() {
 
 async function processAndRender() {
   const { bpm, notes } = await parseMidiFile();
+  if (!notes) return; // Handle null case
   midiBpm = bpm; // store bpm for metronome
   const convertedNotes = await convertAllNotes();
   drawStaff(convertedNotes);
