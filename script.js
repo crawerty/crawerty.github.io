@@ -1,5 +1,6 @@
 import Vex from "https://cdn.skypack.dev/vexflow";
 import { Midi } from "https://cdn.skypack.dev/@tonejs/midi";
+import { PitchDetector } from 'https://esm.sh/pitchy';
 const recordBtn = document.getElementById("record");
 const stopBtn = document.getElementById("stop");
 const player = document.getElementById("player");
@@ -19,6 +20,7 @@ stopMetronome.disabled = true;
 let midiBpm = null;
 
 function durationToBeats(d) {
+  d = d.replace('r', ''); // handle rests
   switch (d) {
     case "w": return 4;
     case "h": return 2;
@@ -46,16 +48,17 @@ function durationToBeats(d) {
 
 //track.notes is to get an array of note objects in a track
 
-//note.name is to get the note name (e.g., "C4")
+//note.name is to get the note name (e.g. "C4")
 
-//note.time is to get the start time in seconds (e.g., 1.5)
+//note.time is to get the start time in seconds (e.g. 1, 1.5)
 
-//note.duration is to get the duration in seconds (e.g., 0.5)
+//note.duration is to get the duration in seconds (e.g. 0.5)
 //Convert note names to VexFlow format (e.g., "C4" to { keys: ["c/4"], duration: "q" })
 //Draw staff using VexFlow's Renderer and Stave classes
 
 async function parseMidiFile() {
   const file = document.getElementById("midiFile").files[0];
+  if (!file) return null;
   const arrayBuffer = await file.arrayBuffer();
   const midi = new Midi(arrayBuffer);
   const notes = midi.tracks[0].notes;
@@ -68,7 +71,7 @@ async function parseMidiFile() {
     if (i > 0) {
       const prev = notes[i - 1];
       const gap = n.time - (prev.time + prev.duration);
-      if (gap > quarter*0.9) {
+      if (gap > quarter * 0.1) { // more sensitive rest detection
         parsed.push({
           note: "rest",
           time: prev.time + prev.duration,
@@ -100,19 +103,20 @@ async function parseMidiFile() {
 
 function getDuration(duration, bpm) {
   const quarter = 60 / bpm;
+  const tolerance = quarter * 0.15; // relative tolerance
   const half = quarter * 2;
   const whole = quarter * 4;
   const eighth = quarter / 2;
   const sixteenth = quarter / 4;
-  if (Math.abs(duration - whole) < 0.1) return "w";
-  if (Math.abs(duration - half) < 0.1) return "h";
-  if (Math.abs(duration - (half * 1.5)) < 0.1) return "hd";
-  if (Math.abs(duration - quarter) < 0.1) return "q";
-  if (Math.abs(duration - (quarter * 1.5)) < 0.1) return "qd";
-  if (Math.abs(duration - eighth) < 0.1) return "8";
-  if (Math.abs(duration - (eighth * 1.5)) < 0.1) return "8d";
-  if (Math.abs(duration - sixteenth) < 0.1) return "16";
-  if (Math.abs(duration - (sixteenth * 1.5)) < 0.1) return "16d";
+  if (Math.abs(duration - whole) < tolerance) return "w";
+  if (Math.abs(duration - half) < tolerance) return "h";
+  if (Math.abs(duration - (half * 1.5)) < tolerance) return "hd";
+  if (Math.abs(duration - quarter) < tolerance) return "q";
+  if (Math.abs(duration - (quarter * 1.5)) < tolerance) return "qd";
+  if (Math.abs(duration - eighth) < tolerance) return "8";
+  if (Math.abs(duration - (eighth * 1.5)) < tolerance) return "8d";
+  if (Math.abs(duration - sixteenth) < tolerance) return "16";
+  if (Math.abs(duration - (sixteenth * 1.5)) < tolerance) return "16d";
   return "q"; // jus in case
 }
 
@@ -123,24 +127,28 @@ async function convertAllNotes() {
   // Group notes by time
   const groups = {};
   notes.forEach(note => {
-    const t = Math.round(note.time * 4) / 4; // quantize to nearest quarter beat
+    const quarter = 60 / bpm;
+    const beatsFromStart = note.time / quarter;
+    const t = Math.round(beatsFromStart * 4) / 4; // quantize by beats not time
     if (!groups[t]) groups[t] = [];
     groups[t].push(note);
   });
 
-  // Convert each group to a chord
+  // Convert each group to a chord or rest
   const afterNotes = Object.values(groups).map(group => {
-    const keys = group.map(n => {
-      if (n.note === "rest") return "b/4"; // handle rests
+    if (group[0].note === "rest") {
+      const duration = getDuration(group[0].duration, bpm);
+      return { keys: ["b/4"], duration: duration + "r" };
+    }
+    
+    const keys = group.filter(n => n.note !== "rest").map(n => {
       const pitch = n.note.slice(0, -1).toLowerCase();
       const octave = n.note.slice(-1);
       return pitch + "/" + octave;
     });
 
     const duration = getDuration(group[0].duration, bpm);
-    const finalDuration = group[0].note === "rest" ? duration + "r" : duration;
-
-    return { keys, duration: finalDuration };
+    return { keys, duration };
   });
 
   return afterNotes;
@@ -150,8 +158,8 @@ async function convertAllNotes() {
 
 
 async function processAndRender() {
-  // updated to use bpm + notes destructuring
   const { bpm, notes } = await parseMidiFile();
+  midiBpm = bpm; // store bpm for metronome
   const convertedNotes = await convertAllNotes();
   drawStaff(convertedNotes);
 }
@@ -161,14 +169,6 @@ function drawStaff(notes) {
   const container = document.getElementById("staff");
   container.innerHTML = "";
 
-  const renderer = new VF.Renderer(container, VF.Renderer.Backends.SVG);
-  renderer.resize(800, 200);
-  const context = renderer.getContext();
-
-  const stave = new VF.Stave(10, 40, 700);
-  stave.addClef("treble").addTimeSignature("4/4");
-  stave.setContext(context).draw();
-
   // Split notes into measures of ~4 beats
   let measures = [];
   let current = [];
@@ -177,6 +177,18 @@ function drawStaff(notes) {
   notes.forEach(n => {
     const beats = durationToBeats(n.duration);
     if (totalBeats + beats > 4) {
+      // Pad current measure to exactly 4 beats before pushing
+      while (totalBeats < 4) {
+        const remaining = 4 - totalBeats;
+        let restDuration;
+        if (remaining >= 4) restDuration = "w";
+        else if (remaining >= 2) restDuration = "h";
+        else if (remaining >= 1) restDuration = "q";
+        else if (remaining >= 0.5) restDuration = "8";
+        else restDuration = "16";
+        current.push({ keys: ["b/4"], duration: restDuration + "r" });
+        totalBeats += durationToBeats(restDuration);
+      }
       measures.push(current);
       current = [];
       totalBeats = 0;
@@ -184,12 +196,52 @@ function drawStaff(notes) {
     current.push(n);
     totalBeats += beats;
   });
-  if (current.length > 0) measures.push(current);
+  // Pad last measure
+  if (current.length > 0) {
+    while (totalBeats < 4) {
+      const remaining = 4 - totalBeats;
+      let restDuration;
+      if (remaining >= 4) restDuration = "w";
+      else if (remaining >= 2) restDuration = "h";
+      else if (remaining >= 1) restDuration = "q";
+      else if (remaining >= 0.5) restDuration = "8";
+      else restDuration = "16";
+      current.push({ keys: ["b/4"], duration: restDuration + "r" });
+      totalBeats += durationToBeats(restDuration);
+    }
+    measures.push(current);
+  }
 
-  // Render each measure separately
+  // Calculate how many measures fit per line and total height needed
+  const measuresPerLine = 4;
+  const lineHeight = 200;
+  const numLines = Math.ceil(measures.length / measuresPerLine);
+  
+  const renderer = new VF.Renderer(container, VF.Renderer.Backends.SVG);
+  renderer.resize(1400, numLines * lineHeight + 50);
+  const context = renderer.getContext();
+
+  // Render measures with line wrapping
   let x = 10;
-  measures.forEach(measure => {
-    const stave = new VF.Stave(x, 40, 150);
+  let y = 40;
+  measures.forEach((measure, i) => {
+    const isFirstInLine = i % measuresPerLine === 0;
+    const isSecondInLine = i % measuresPerLine === 1;
+    const isFourthInLine = i % measuresPerLine === 3;
+
+    // Start new line if we've hit the limit
+    if (i > 0 && isFirstInLine) {
+      x = 10;
+      y += lineHeight;
+    }
+
+    const staveWidth = isFirstInLine ? 350 : 330;
+    const formatWidth = isFirstInLine ? 280 : (isSecondInLine ? 310 : (isFourthInLine ? 310 : 310));
+
+    const stave = new VF.Stave(x, y, staveWidth);
+    if (isFirstInLine) {
+      stave.addClef("treble").addTimeSignature("4/4");
+    }
     stave.setContext(context).draw();
 
     const vexNotes = measure.map(n => new VF.StaveNote({
@@ -201,10 +253,10 @@ function drawStaff(notes) {
     const voice = new VF.Voice({ num_beats: 4, beat_value: 4 });
     voice.addTickables(vexNotes);
 
-    new VF.Formatter().joinVoices([voice]).format([voice], 120);
+    new VF.Formatter().joinVoices([voice]).format([voice], formatWidth);
     voice.draw(context, stave);
 
-    x += 160; // move the next stave to the right
+    x += isFirstInLine ? 350 : 330;
   });
 }
 
@@ -259,10 +311,5 @@ function stopRecording() {
 
 document.getElementById("midiFile").addEventListener("change", () => {
   console.log("File selected! Processing...");
-  processAndRender();
-});
-
-
-document.getElementById("midiFile").addEventListener("change", () => {
   processAndRender();
 });
