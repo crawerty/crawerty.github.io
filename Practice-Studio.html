@@ -23,23 +23,28 @@
         <p>Please upload a MIDI file (.mid) of any piece of music.</p>
     </section>
 
-    <section class="metronome" id="Metronome">
-        <h3>Metronome</h3>
+    <section class="controls" id="Controls"> 
+  <h3>Metronome</h3>
         <label for="bpm">BPM:</label>
-        <div id="staff"></div>
         <input type="number" id="bpm" value="100"/>
         <button id="startMetronome">Start Metronome</button>
         <button id="stopMetronome">Stop Metronome</button>
-    </section>
-    <section class="controls" id="Controls"> 
+    <br>
+  <br>
+  <h3>To Record:</h3>
   <button id="record"> Start Recording </button>
   <button id="stop" disabled> Stop Recording </button>
-  <br>
-  <h3>Your Recording:</h3>
   <br>
   <audio id="player" controls></audio>
 
   <script type="module" src="script.js"></script>
+    </section>
+
+    <section class = "sheetMusic.box" id ="SheetMusic">
+        <h3>Sheet Music Display</h3>
+        <div id="staff">
+            <!-- Sheet music will be rendered here -->
+        </div>
     </section>
 </body>
 </html>
