@@ -82,7 +82,7 @@ h2 {
   background: #e8f7ee;
 }
 
-#Home, #Mission, #Practice\ Studio, #Controls, #Metronome, #midiFile, #uploadFile {
+#Home, #Mission, #Practice-Studio, #Controls, #Metronome, #midiFile, #uploadFile {
   margin: 50px auto;
   max-width: fit-content;
   overflow: visible;
