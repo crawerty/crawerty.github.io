@@ -2,13 +2,6 @@ import Vex from "https://cdn.skypack.dev/vexflow";
 import { Midi } from "https://cdn.skypack.dev/@tonejs/midi";
 import { PitchDetector } from 'https://esm.sh/pitchy';
 import { Frequency } from "https://cdn.skypack.dev/tone";
-
-// Helper function to convert frequency to note name using Tone.js
-function pitchFrequencyToNote(frequency) {
-    if (!frequency || frequency < 20) return null;
-    return Frequency(frequency).toNote();
-}
-
 const recordBtn = document.getElementById("record");
 const stopBtn = document.getElementById("stop");
 const player = document.getElementById("player");
@@ -28,15 +21,6 @@ stopMetronome.addEventListener("click", stopMet);
 stopMetronome.disabled = true;
 let midiBpm = null;
 let midiNotesData = null; // ADD THIS - store parsed notes globally
-
-function extractNoteInfo(note) { //another function that returns note info for pitchy use
-    if (note === "rest") {
-        return { keys: ["b/4"], duration: "qr" }; // default quarter rest
-    }
-    const pitch = note.slice(0, -1).toLowerCase();
-    const octave = note.slice(-1);
-    return { keys: [pitch + "/" + octave], duration: "q" }; // default quarter note
-}
 
 function getLineAndBeat(time, bpm) { //function to get line and beat from time and bpm
     const quarter = 60/bpm;
