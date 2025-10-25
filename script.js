@@ -1,11 +1,20 @@
 import Vex from "https://cdn.skypack.dev/vexflow";
 import { Midi } from "https://cdn.skypack.dev/@tonejs/midi";
-// import { PitchDetector } from 'https://esm.sh/pitchy'; // Not used currently
+import { PitchDetector } from 'https://esm.sh/pitchy';
+import { Frequency } from "https://cdn.skypack.dev/tone";
+
+// Helper function to convert frequency to note name using Tone.js
+function pitchFrequencyToNote(frequency) {
+    if (!frequency || frequency < 20) return null;
+    return Frequency(frequency).toNote();
+}
+
 const recordBtn = document.getElementById("record");
 const stopBtn = document.getElementById("stop");
 const player = document.getElementById("player");
 const startMetronome = document.getElementById("startMetronome");
 const stopMetronome = document.getElementById("stopMetronome");
+const analyzeOutput = document.getElementById("analyze");
 let recorder;
 let audioChunks = [];
 recordBtn.addEventListener("click", startRecording);
@@ -18,6 +27,117 @@ startMetronome.addEventListener("click", startMet);
 stopMetronome.addEventListener("click", stopMet);
 stopMetronome.disabled = true;
 let midiBpm = null;
+let midiNotesData = null; // ADD THIS - store parsed notes globally
+
+function extractNoteInfo(note) { //another function that returns note info for pitchy use
+    if (note === "rest") {
+        return { keys: ["b/4"], duration: "qr" }; // default quarter rest
+    }
+    const pitch = note.slice(0, -1).toLowerCase();
+    const octave = note.slice(-1);
+    return { keys: [pitch + "/" + octave], duration: "q" }; // default quarter note
+}
+
+function getLineAndBeat(time, bpm) { //function to get line and beat from time and bpm
+    const quarter = 60/bpm;
+    const beatsFromStart = time / quarter;
+    const measure = Math.floor(beatsFromStart / 4) + 1; // 4 beats per measure
+    const beat = (beatsFromStart % 4) + 1;
+    return { line: measure, beat };
+}
+
+async function getTotalBeats() { //function to get total beats from midi notes
+    let totalBeats = 0;
+    const notes = await convertAllNotes();
+    for (let i = 0; i < notes.length; i++) {
+        const note = notes[i];
+        totalBeats += durationToBeats(note.duration);
+    }
+    return totalBeats;
+}
+
+
+
+
+
+
+
+
+function detectNote(audioBuffer, timeInSeconds, duration) {
+    const sampleRate = audioBuffer.sampleRate;
+    const windowSize = 8192;
+    
+    const timingLeeway = 0.075;
+    const skipStart = duration * 0.23 + timingLeeway;
+    
+    const startSample = Math.floor((timeInSeconds + skipStart) * sampleRate);
+    const endSample = Math.min(startSample + windowSize, audioBuffer.length);
+    
+    if (startSample >= audioBuffer.length) return null;
+    
+    const channelData = audioBuffer.getChannelData(0);
+    let slice = channelData.slice(startSample, endSample);
+    
+    // ADD OCT 24: filter to remove metronome clicks
+    let filtered = new Float32Array(slice.length);
+    let prevSample = 0;
+    const alpha = 0.95; // High-pass filter coefficient
+    for (let i = 0; i < slice.length; i++) {
+        filtered[i] = alpha * (filtered[i-1] || 0) + alpha * (slice[i] - prevSample);
+        prevSample = slice[i];
+    }
+    slice = filtered;
+    
+    const rms = Math.sqrt(slice.reduce((sum, val) => sum + val * val, 0) / slice.length);
+    if (rms < 0.0008) return null; // CHANGED: Lower from 0.002 to 0.0008
+    
+    const detector = PitchDetector.forFloat32Array(slice.length);
+    const [freq, clarity] = detector.findPitch(slice, sampleRate);
+    
+    // ADD: Reject if detected frequency is too close to metronome (375Hz)
+    if (freq && Math.abs(freq - 375) < 30) return null;
+    
+    if (!freq || clarity < 0.35) return null; // CHANGED: Lower from 0.5 to 0.35
+    return freq;
+}
+
+async function compareNotes() {
+    const res = await fetch(player.src);
+    const arrayBuffer = await res.arrayBuffer();
+    const recordingBuffer = await ctx.decodeAudioData(arrayBuffer);
+
+    document.getElementById("output").innerText = "";
+    
+    for (let i = 0; i < midiNotesData.length; i++) {
+        const midiNote = midiNotesData[i];
+        let time = midiNote.time;
+        
+        let midiNoteName = Array.isArray(midiNote.note)
+            ? midiNote.note[midiNote.note.length - 1]
+            : midiNote.note;
+        
+        if (midiNoteName === "rest") continue;
+        
+        let detectedFreq = detectNote(recordingBuffer, time, midiNote.duration);
+        
+        if (!detectedFreq) {
+            document.getElementById("output").innerText += `At line ${Math.ceil(getLineAndBeat(time,midiBpm).line / 4)} Measure ${((getLineAndBeat(time,midiBpm).line - 1) % 4) + 1}, Beat ${getLineAndBeat(time,midiBpm).beat.toFixed(1)}: No pitch detected\n`;
+            continue;
+        }
+        
+        const expectedFreq = Frequency(midiNoteName).toFrequency();
+        const centsOff = 1200 * Math.log2(detectedFreq / expectedFreq);
+        
+        if (Math.abs(centsOff) > 80) {
+            const direction = centsOff > 0 ? "sharp" : "flat";
+            document.getElementById("output").innerText += `At line ${Math.ceil(getLineAndBeat(time,midiBpm).line / 4)} Measure ${((getLineAndBeat(time,midiBpm).line - 1) % 4) + 1}, Beat ${getLineAndBeat(time,midiBpm).beat.toFixed(1)}: ${Math.abs(centsOff).toFixed(0)} cents too ${direction} (Expected: ${midiNoteName})\n`;
+            console.log(`${centsOff.toFixed(0)} cents ${direction}: Detected ${detectedFreq.toFixed(1)}Hz, Expected ${expectedFreq.toFixed(1)}Hz`);
+        } else {
+            console.log(`In tune: ${detectedFreq.toFixed(1)}Hz`);
+        }
+    }
+}
+
 
 function durationToBeats(d) {
   d = d.replace('r', ''); // handle rests
@@ -61,35 +181,63 @@ async function parseMidiFile() {
   if (!file) return null;
   const arrayBuffer = await file.arrayBuffer();
   const midi = new Midi(arrayBuffer);
-  const notes = midi.tracks[0].notes;
-  const bpm = midi.header.tempos.length > 0 ? midi.header.tempos[0].bpm : 120;
+
+  let melodyTrack = midi.tracks[0];
+  if (midi.tracks.length > 1) {
+    melodyTrack = midi.tracks.reduce((a, b) => 
+      (a.notes.length > b.notes.length ? a : b) // FIX: choose track with MORE notes
+    );
+  }
+  
+  // Expand range or remove filter - typical vocal range is C3 to C6 (48 to 84 MIDI)
+  const notes = melodyTrack.notes.filter(n => n.midi >= 48 && n.midi <= 84);
+  const bpm = Math.round(midi.header.tempos.length > 0 ? midi.header.tempos[0].bpm : 120);
 
   let parsed = [];
   const quarter = 60 / bpm; 
+
+  const timeGroups = {};
   for (let i = 0; i < notes.length; i++) {
     const n = notes[i];
-    if (i > 0) {
-      const prev = notes[i - 1];
-      const gap = n.time - (prev.time + prev.duration);
-      if (gap > quarter * 0.1) { // more sensitive rest detection
-        parsed.push({
-          note: "rest",
-          time: prev.time + prev.duration,
-          duration: gap,
-        });
-      }
-    }
-    parsed.push({
-      note: n.name,
-      time: n.time,
-      duration: n.duration,
-      velocity: n.velocity,
-    });
+    const timeKey = n.time.toFixed(3);
+    if (!timeGroups[timeKey]) timeGroups[timeKey] = [];
+    timeGroups[timeKey].push(n);
   }
+  
+  const sortedTimes = Object.keys(timeGroups).map(Number).sort((a, b) => a - b);
+  let prevEndTime = 0;
+  
+  for (let time of sortedTimes) {
+    const group = timeGroups[time.toFixed(3)];
+    const gap = time - prevEndTime;
+    if (gap > quarter * 0.1 && prevEndTime > 0) {
+      parsed.push({
+        note: "rest",
+        time: prevEndTime,
+        duration: gap,
+      });
+    }
 
-  return { bpm, notes: parsed }; 
+    let chosenNote = group[0];
+    if (group.length > 1) {
+      // FIX: Choose highest note (melody is typically on top)
+      chosenNote = group.reduce((prev, curr) => 
+        curr.midi > prev.midi ? curr : prev
+      );
+    }
+
+    parsed.push({
+      note: chosenNote.name,
+      time: time,
+      duration: chosenNote.duration,
+      velocity: chosenNote.velocity,
+    });
+
+    prevEndTime = time + chosenNote.duration;
+  }
+  console.log({ bpm, notes: parsed });
+  return { bpm, notes: parsed };
 }
-
 
 
 //notes for duration conversion
@@ -124,31 +272,27 @@ function getDuration(duration, bpm) {
 async function convertAllNotes() {
   const { bpm, notes } = await parseMidiFile();
 
-  // Group notes by time
   const groups = {};
   notes.forEach(note => {
     const quarter = 60 / bpm;
     const beatsFromStart = note.time / quarter;
-    const t = Math.round(beatsFromStart * 4) / 4; // quantize by beats not time
+    const t = Math.round(beatsFromStart * 4) / 4;
     if (!groups[t]) groups[t] = [];
     groups[t].push(note);
   });
 
-  // Convert each group to a chord or rest
   const afterNotes = Object.values(groups).map(group => {
     if (group[0].note === "rest") {
       const duration = getDuration(group[0].duration, bpm);
       return { keys: ["b/4"], duration: duration + "r" };
     }
-    
-    const keys = group.filter(n => n.note !== "rest").map(n => {
-      const pitch = n.note.slice(0, -1).toLowerCase();
-      const octave = n.note.slice(-1);
-      return pitch + "/" + octave;
-    });
-
-    const duration = getDuration(group[0].duration, bpm);
-    return { keys, duration };
+    const n = group[0];
+    const pitch = n.note.slice(0, -1).toLowerCase();
+    const octave = n.note.slice(-1);
+    return { 
+      keys: [pitch + "/" + octave], 
+      duration: getDuration(n.duration, bpm) 
+    };
   });
 
   return afterNotes;
@@ -157,10 +301,12 @@ async function convertAllNotes() {
 
 
 
+
 async function processAndRender() {
   const { bpm, notes } = await parseMidiFile();
   if (!notes) return; // Handle null case
   midiBpm = bpm; // store bpm for metronome
+  midiNotesData = notes; // global var
   const convertedNotes = await convertAllNotes();
   drawStaff(convertedNotes);
   document.getElementById("bpm").value = midiBpm;
@@ -266,7 +412,10 @@ function drawStaff(notes) {
 
 function click() {
     const o = ctx.createOscillator();
-    o.connect(ctx.destination);
+    const gain = ctx.createGain();
+    o.connect(gain);
+    gain.connect(ctx.destination);
+    gain.gain.value = 0.25;
     o.start();
     o.stop(ctx.currentTime + 0.02);
     o.type = "sine";
@@ -286,22 +435,82 @@ function stopMet() {
     stopMetronome.disabled = true;
 }
 
+function playStartingNote(noteName, duration = 1) {
+  if (ctx.state === "suspended") ctx.resume();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.type = "sine";
+  osc.frequency.value = Frequency(noteName).toFrequency();
+  gain.gain.setValueAtTime(0.5, ctx.currentTime);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + duration);
+}
+
+window.playStartingNote = function(noteName, duration = 1) {
+  if (ctx.state === "suspended") ctx.resume();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.type = "sine";
+  osc.frequency.value = Frequency(noteName).toFrequency();
+  gain.gain.setValueAtTime(0.5, ctx.currentTime);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + duration);
+};
+
+
 function startRecording() {
     navigator.mediaDevices.getUserMedia({ audio: true })
         .then(stream => {
-            recorder = new MediaRecorder(stream);
-            recorder.ondataavailable = event => {
-                audioChunks.push(event.data);
-            };
-            recorder.onstop = () => {
-                const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
-                const audioUrl = URL.createObjectURL(audioBlob);
-                player.src = audioUrl;
-                audioChunks = [];
-            };
-            recorder.start();
-            recordBtn.disabled = true;
-            stopBtn.disabled = false;
+            if (ctx.state === "suspended") {
+                ctx.resume();
+            }
+            // Create countdown display
+            let countdownDiv = document.createElement('div');
+            countdownDiv.id = 'countdown';
+            countdownDiv.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 120px; font-weight: bold; color: #6ac47e; z-index: 9999; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);';
+            document.body.appendChild(countdownDiv);
+            
+            let count = 4;
+            countdownDiv.innerText = count;
+            click();
+            const firstNote = Array.isArray(midiNotesData[0].note)
+                    ? midiNotesData[0].note[midiNotesData[0].note.length - 1]
+                : midiNotesData[0].note;
+                playStartingNote(firstNote, 1);
+            
+            // Play metronome clicks during countdown
+            let bpm = midiBpm !== null ? midiBpm : parseInt(document.getElementById("bpm").value);
+            let countdownInterval = setInterval(() => {
+                click(); // metronome click
+                count--;
+
+                if (count > 0) {
+                    countdownDiv.innerText = count;
+                } else {
+                    clearInterval(countdownInterval);
+                    countdownDiv.remove();
+                    
+                    // Start actual recording after countdown
+                    recorder = new MediaRecorder(stream);
+                    recorder.ondataavailable = event => {
+                        audioChunks.push(event.data);
+                    };
+                    recorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+                        const audioUrl = URL.createObjectURL(audioBlob);
+                        player.src = audioUrl;
+                        audioChunks = [];
+                    };
+                    recorder.start();
+                    recordBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    startMet();
+                }
+            }, (60 / bpm) * 1000); // one beat interval
         });
 }
 
@@ -309,9 +518,16 @@ function stopRecording() {
     recorder.stop();
     recordBtn.disabled = false;
     stopBtn.disabled = true;
+    stopMet();
 }
 
-document.getElementById("midiFile").addEventListener("change", () => {
-  console.log("File selected! Processing...");
+// FIX: add event listener for analyze button
+analyzeOutput.addEventListener("click", compareNotes);
+
+document.getElementById("midiFile").addEventListener("change", async () => {
+  console.log("File selected! Processing as we speak...");
   processAndRender();
+  const notes = await convertAllNotes();
+  console.log(notes[4].duration);
+  console.log(await getTotalBeats());
 });
