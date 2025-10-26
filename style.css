@@ -1,6 +1,6 @@
 :root {
-  --primary: #6ac47e;
-  --primary-dark: #4ea864;
+  --primary: #4b66b0;
+  --primary-dark: #4b66b0;
   --background: #ffffff;
   --text: #2e2e2e;
   --secondary-bg: #f5fff7;
@@ -51,14 +51,15 @@ nav a {
   display: flex;
   justify-content: center;
   align-items: center;
-  border-right: 2px solid #ddd;
+  border-right: 2px solid #758fd7;
   color: #2e2e2e;
+  background-color: #e5e9f8;
   text-decoration: none;
   margin: 8px 0;
   font-size: 2rem;
   font-weight: bold;
   margin: auto 10px;
-  box-shadow: inset 0 0 15px gainsboro;
+  box-shadow: inset 0 0 15px #6883cc;
   border-radius: 5px;
   padding: 10px 15px;
   transition: background 0.3s, color 0.3s;
@@ -74,19 +75,32 @@ h2 {
 }
 
 
+#logo {
+  display: block;
+  margin: 0 auto;
+  width: 320px; 
+}
+#logoPS {
+  display: block;
+  margin: 0 auto;
+  width: 275px; 
+}
+
+
+
 #Home {
-  background: #f9fdf9;
+  background: #a2b4e5;
 }
 
 #Mission {
-  background: #e8f7ee;
+  background: #a2b4e5;
 }
 
 #Home, #Mission, #Practice-Studio, #Controls, #Metronome, #midiFile, #uploadFile {
   margin: 50px auto;
   max-width: fit-content;
   overflow: visible;
-  box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.05);
+  box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.2);
   border-radius: 15px;
   padding: 30px;
 }
