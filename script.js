@@ -120,6 +120,7 @@ async function compareNotes() {
             console.log(`In tune: ${detectedFreq.toFixed(1)}Hz`);
         }
     }
+    document.getElementById("output").innerText += '\nAnalysis complete. Remember that 100 cents is one semitone.\nIf you see no messages, you were in tune the whole time :)\n If not, don\'t be discouraged! Practice makes perfect, and practicing with OnSight might make more than perfect...';
 }
 
 
@@ -376,11 +377,29 @@ function drawStaff(notes) {
     }
     stave.setContext(context).draw();
 
-    const vexNotes = measure.map(n => new VF.StaveNote({
-      clef: "treble",
-      keys: n.keys,
-      duration: n.duration
-    }));
+    const vexNotes = measure.map(n => {
+      const note = new VF.StaveNote({
+        clef: "treble",
+        keys: n.keys,
+        duration: n.duration
+      });
+      
+      // Add accidentals (sharps/flats)
+      n.keys.forEach((key, idx) => {
+        if (key.includes('#')) {
+          note.addModifier(new VF.Accidental('#'), idx);
+        } else if (key.includes('b') && key.split('/')[0].includes('b')) {
+          note.addModifier(new VF.Accidental('b'), idx);
+        }
+      });
+      
+      // Add dots for dotted notes
+      if (n.duration.includes('d') && !n.duration.includes('r')) {
+        VF.Dot.buildAndAttach([note], { all: true });
+      }
+      
+      return note;
+    });
 
     const voice = new VF.Voice({ num_beats: 4, beat_value: 4 });
     voice.addTickables(vexNotes);
@@ -449,6 +468,14 @@ window.playStartingNote = function(noteName, duration = 1) {
 function startRecording() {
     navigator.mediaDevices.getUserMedia({ audio: true })
         .then(stream => {
+            if (midiNotesData === null) {
+                alert("Please upload a MIDI file before recording.");
+                return;
+            }
+            document.getElementById("SheetMusic").scrollIntoView({
+            behavior: "smooth",
+            block: "start"
+            });
             if (ctx.state === "suspended") {
                 ctx.resume();
             }
