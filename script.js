@@ -394,19 +394,6 @@ function playStartingNote(noteName, duration = 1) {
   osc.stop(ctx.currentTime + duration);
 }
 
-window.playStartingNote = function(noteName, duration = 1) {
-  if (ctx.state === "suspended") ctx.resume();
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  osc.type = "sine";
-  osc.frequency.value = Frequency(noteName).toFrequency();
-  gain.gain.setValueAtTime(0.5, ctx.currentTime);
-  osc.start(ctx.currentTime);
-  osc.stop(ctx.currentTime + duration);
-};
-
 function startRecording() {
     navigator.mediaDevices.getUserMedia({ audio: true })
         .then(stream => {
