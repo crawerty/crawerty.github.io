@@ -103,7 +103,7 @@ async function compareNotes() {
         const expectedFreq = Frequency(midiNoteName).toFrequency();
         const centsOff = 1200 * Math.log2(detectedFreq / expectedFreq);
         
-        if (Math.abs(centsOff) > 80) {
+        if (Math.abs(centsOff) > 50) {
             const direction = centsOff > 0 ? "sharp" : "flat";
             document.getElementById("output").innerText += `At line ${Math.ceil(getLineAndBeat(time,midiBpm).line / 4)} Measure ${((getLineAndBeat(time,midiBpm).line - 1) % 4) + 1}, Beat ${getLineAndBeat(time,midiBpm).beat.toFixed(1)}: ${Math.abs(centsOff).toFixed(0)} cents too ${direction} (Expected: ${midiNoteName})\n`;
             console.log(`${centsOff.toFixed(0)} cents ${direction}: Detected ${detectedFreq.toFixed(1)}Hz, Expected ${expectedFreq.toFixed(1)}Hz`);
