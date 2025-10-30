@@ -1,27 +1,63 @@
 :root {
   --primary: #4b66b0;
-  --primary-dark: #4b66b0;
+  --primary-dark: #3d5492;
+  --accent: #a2b4e5;
   --background: #ffffff;
+  --surface: #f7f9ff;
   --text: #2e2e2e;
-  --secondary-bg: #f5fff7;
+  --text-muted: #555;
+  --shadow: rgba(0, 0, 0, 0.08);
 }
 
-html,  body {
+/*general*/
+html, body {
   height: 100%;
   margin: 0;
   scroll-behavior: smooth;
+  font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+  background: var(--background);
+  color: var(--text);
+  line-height: 1.6;
 }
 
 body {
-  font-family: "Helvetica Neue", Arial, sans-serif;
-  background: var(--background);
-  color: var(--text);
-  text-align: left;
   padding: 50px 20px;
-  margin: 0;
   scroll-snap-type: y mandatory;
-  overflow-y: visible;
-  margin: 0;
+}
+
+/*nav*/
+
+nav {
+  display: flex;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  height: 100px;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 10px var(--shadow);
+  border-bottom: 2px solid var(--accent);
+  z-index: 1000;
+}
+
+nav a {
+  flex: 1;
+  text-align: center;
+  font-size: 1.6rem;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--text);
+  padding: 20px;
+  border-radius: 10px;
+  margin: 0 10px;
+  transition: all 0.25s ease;
+  background: #e8edff;
+}
+
+nav a:hover {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 3px 10px rgba(75, 102, 176, 0.4);
 }
 
 .page-section {
@@ -30,123 +66,72 @@ body {
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  padding: 40px;
   scroll-snap-align: start;
-  font-size: 1.3rem;
-}
-
-nav {
-  display: flex;
-  width: 100%;
-  height: 120px;
-  position: sticky;
-  top: 0;
-  right: 0;
-  align-items: center;
-  z-index: 1000;
-}
-
-nav a {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  border-right: 2px solid #758fd7;
-  color: #2e2e2e;
-  background-color: #e5e9f8;
-  text-decoration: none;
-  margin: 8px 0;
-  font-size: 2rem;
-  font-weight: bold;
-  margin: auto 10px;
-  box-shadow: inset 0 0 15px #6883cc;
-  border-radius: 5px;
-  padding: 10px 15px;
-  transition: background 0.3s, color 0.3s;
-}
-nav a:hover {
-  background: var(--primary);
-  color: white;
-}
-
-h2 {
-  font-family: cursive; 
-  font-size: 4rem;
-}
-
-
-#logo {
-  display: block;
-  margin: 0 auto;
-  width: 320px; 
-}
-#logoPS {
-  display: block;
-  margin: 0 auto;
-  width: 275px; 
-}
-
-
-
-#Home {
-  background: #a2b4e5;
-}
-
-#Mission {
-  background: #a2b4e5;
+  text-align: center;
+  padding: 60px 30px;
 }
 
 #Home, #Mission, #Practice-Studio, #Controls, #Metronome, #midiFile, #uploadFile {
-  margin: 50px auto;
-  max-width: fit-content;
-  overflow: visible;
-  box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.2);
-  border-radius: 15px;
-  padding: 30px;
+  background: var(--surface);
+  border-radius: 18px;
+  box-shadow: 0 6px 18px var(--shadow);
+  padding: 40px;
+  margin: 60px auto;
+  max-width: 900px;
 }
 
-#SheetMusic {
-  margin: 50px auto;
-  max-width: 1400px;
-  overflow: visible;
-  box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.05);
-  border-radius: 15px;
-  padding: 30px; 
-}
-
+/*headers & p*/
 h1 {
+  font-size: 2.6rem;
   color: var(--primary-dark);
-  font-size: 3rem;
-  margin-bottom: 10px;
   letter-spacing: 1px;
+  margin-bottom: 15px;
+}
+
+h2 {
+  font-family: 'Poppins', cursive;
+  font-size: 3.2rem;
+  color: var(--primary-dark);
+  margin-bottom: 10px;
+}
+
+h3 {
+  font-size: 1.5rem;
+  color: var(--primary-dark);
+  border-bottom: 2px solid var(--primary);
+  display: inline-block;
+  padding-bottom: 4px;
+  margin-top: 40px;
 }
 
 p {
-  font-size: 1.2rem;
-  color: #555;
-  margin-bottom: 30px;
+  font-size: 1.15rem;
+  color: var(--text-muted);
+  margin-bottom: 25px;
 }
 
-button {
+/* buttons*/
+button, #midiFile {
   background-color: var(--primary);
   color: white;
   border: none;
-  padding: 12px 25px;
-  margin: 10px;
-  font-size: 1.1rem;
-  font-weight: bold;
-  border-radius: 8px;
+  padding: 12px 30px;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: 10px;
   cursor: pointer;
   transition: all 0.25s ease-in-out;
+  box-shadow: 0 4px 10px var(--shadow);
 }
 
-button:hover {
+button:hover, #midiFile:hover {
   background-color: var(--primary-dark);
-  transform: scale(1.05);
+  transform: translateY(-2px);
 }
 
 button:disabled {
-  background-color: #cccccc;
+  background-color: #cfd6ea;
+  color: #666;
   cursor: not-allowed;
   transform: none;
 }
@@ -154,27 +139,24 @@ button:disabled {
 audio {
   margin-top: 20px;
   width: 80%;
-  outline: none;
   border-radius: 10px;
-  background: var(--secondary-bg);
-  padding: 10px;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1);
-}
-
-h3 {
-  color: var(--primary-dark);
-  margin-top: 40px;
-  font-size: 1.6rem;
-  border-bottom: 2px solid var(--primary);
-  display: inline-block;
-  padding-bottom: 5px;
+  background: var(--surface);
+  box-shadow: 0 3px 8px var(--shadow);
+  padding: 8px;
+  outline: none;
 }
 
 .container {
-  background: var(--secondary-bg);
-  padding: 30px;
+  background: var(--surface);
+  padding: 35px;
   border-radius: 15px;
+  box-shadow: 0 6px 15px var(--shadow);
   max-width: 700px;
   margin: 0 auto;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+#logo, #logoPS {
+  display: block;
+  margin: 0 auto 20px;
+  width: 300px;
 }
