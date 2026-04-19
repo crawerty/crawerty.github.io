@@ -1,7 +1,7 @@
-import Vex from "https://cdn.skypack.dev/vexflow";
-import { Midi } from "https://cdn.skypack.dev/@tonejs/midi";
+import Vex from "https://esm.sh/vexflow";
+import { Midi } from "https://esm.sh/@tonejs/midi";
+import { Frequency } from "https://esm.sh/tone";
 import { PitchDetector } from 'https://esm.sh/pitchy';
-import { Frequency } from "https://cdn.skypack.dev/tone";
 const recordBtn = document.getElementById("record");
 const stopBtn = document.getElementById("stop");
 const player = document.getElementById("player");
