@@ -394,6 +394,10 @@ function playStartingNote(noteName, duration = 1) {
   osc.stop(ctx.currentTime + duration);
 }
 
+function playPiece(midiNotesData) {
+  
+}
+
 function startRecording() {
     navigator.mediaDevices.getUserMedia({ audio: true })
         .then(stream => {
