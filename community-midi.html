@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/png" href="tabCover2.png" />
+  <link rel="stylesheet" href="home-community.css" />
+  <title>OnSight Music — Community MIDI</title>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="index-modern.html" aria-label="OnSight Music home"><img src="logo2.jpg" alt="OnSight Music logo" /></a>
+    <nav aria-label="Primary navigation">
+      <a href="index-modern.html">Home</a>
+      <a href="Practice-Studio-modern.html">Practice Studio</a>
+      <a class="active" href="community-midi.html">Community MIDI</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="page-intro">
+      <p class="eyebrow">Community MIDI</p>
+      <h1>Practice files, shared by the community.</h1>
+      <p>Download a part, then open it in Practice Studio. Have a useful practice file? Prepare it below for community review.</p>
+    </section>
+
+    <section class="library-section" aria-labelledby="library-heading">
+      <div class="section-intro inline-heading">
+        <div><p class="eyebrow">Available now</p><h2 id="library-heading">Practice library</h2></div>
+        <p id="catalogCount" class="catalog-count">Loading library…</p>
+      </div>
+      <div class="library-tools">
+        <label class="library-search" for="librarySearch">
+          <span>Search library</span>
+          <input id="librarySearch" type="search" placeholder="Title, part, or composer" autocomplete="off" />
+        </label>
+      </div>
+      <div id="midiLibrary" aria-live="polite"></div>
+      <button id="showMoreFiles" class="show-more" type="button" hidden>Show 15 more <span aria-hidden="true">↓</span></button>
+      <p class="library-note">After downloading, open <a href="Practice-Studio-modern.html">Practice Studio</a> and upload the file to practice it.</p>
+    </section>
+
+    <section class="submit-section" aria-labelledby="submit-heading">
+      <div class="submit-copy">
+        <p class="eyebrow">Contribute</p>
+        <h2 id="submit-heading">Submit a MIDI file</h2>
+        <p>Help other musicians prepare their parts. Add enough information for a director or singer to understand what they are downloading.</p>
+        <p class="note">Files remain private until reviewed. Approved submissions appear in the practice library.</p>
+      </div>
+      <form id="midiSubmissionForm" class="submission-form">
+        <label>Piece title<input id="submissionTitle" name="title" type="text" placeholder="e.g. Oh Fortuna" required /></label>
+        <label>Part / voice<input id="submissionPart" name="part" type="text" placeholder="e.g. Bass 1" required /></label>
+        <label>Composer or arranger<input name="credit" type="text" placeholder="Optional" /></label>
+        <label>MIDI file<input id="submissionFile" name="midi" type="file" accept=".mid,.midi,audio/midi" required /></label>
+        <button type="submit">Submit for review</button>
+        <p id="submissionStatus" class="submission-status" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+
+  <footer><span>OnSight Music</span><span>Practice more. Rehearse smarter.</span></footer>
+  <script src="community-midi.js"></script>
+</body>
+</html>

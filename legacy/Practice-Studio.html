@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head> 
+    <link rel="icon" type="image/png" href="tabCover2.png">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="style.css"/>
+    <title>OnSight Music - Practice Studio</title>
+</head>
+<body>
+    <img id="logoPS" src="logo2.jpg" alt="OnSight Music logo" width="100"/>
+    <section class ="nav" id="Nav"> 
+        <nav>
+        <a href="index.html">Home</a>
+        <a href="#uploadFile">Practice Studio</a>
+    </nav>
+        <section class="practice" id="Practice-Studio">
+    <h1><i>OnSight Music Presents: </i></h1>
+    <h2><i>OnSight Practice Studio&trade;</i></h2>
+    </section> 
+    </section>
+    <section class="uploadFile" id="uploadFile">
+        <h3>Upload Your MIDI File</h3>
+        <input type="file" id="midiFile" accept=".mid, .midi, audio/midi" />
+        <p>Please upload a MIDI file (.mid) of any piece of music.</p>
+    </section>
+
+    <section class="controls" id="Controls"> 
+  <h3>Metronome</h3>
+        <label for="bpm">BPM:</label>
+        <input type="number" id="bpm" value="100"/>
+        <button id="startMetronome">Start Metronome</button>
+        <button id="stopMetronome">Stop Metronome</button>
+    <br>
+  <br>
+  <h3>To Record:</h3>
+  <button id="record"> Start Recording </button>
+  <button id="stop" disabled> Stop Recording </button>
+  <br>
+  <audio id="player" controls></audio>
+
+  <script type="module" src="script.js"></script>
+    </section>
+
+    <section class = "sheetMusic" id ="SheetMusic">
+        <h3><i>OnSight</i> Practice Studio - Analysis</h3> <br>
+        <button id="analyze">Analyze Your Recording</button>
+        <p>Your <i>OnSight</i> analysis results will appear here:</p>
+        <div id="output">
+            <!-- Analysis results will be displayed here -->
+        </div>
+        <h3>Sheet Music Display</h3>
+        <div id="staff">
+            <!-- Sheet music will be rendered here -->
+        </div>
+    </section>
+</body>
+</html>
