@@ -33,6 +33,8 @@ let midiNotesData = null;
 let midiTimeSignatures = [{ startBeat: 0, numerator: 4, denominator: 4 }];
 let midiClef = "treble";
 let currentScoreInstance = null;
+let scoreSegmentPositions = null;
+let scoreNoteAnchors = [];
 let practiceOscillators = [];
 let practiceTrackStopTimer = null;
 
@@ -53,6 +55,12 @@ async function renderMuseScore(midiData) {
     }
 
     currentScoreInstance = await WebMscore.load("midi", midiData);
+    try {
+      scoreSegmentPositions = await currentScoreInstance.segmentPositions();
+    } catch (positionError) {
+      console.warn("Could not load score positions for visual feedback:", positionError);
+      scoreSegmentPositions = null;
+    }
     const pageCount = await currentScoreInstance.npages();
     const svgPages = await Promise.all(
       Array.from({ length: pageCount }, (_, pageNumber) =>
@@ -67,6 +75,7 @@ async function renderMuseScore(midiData) {
       page.innerHTML = svgString;
       container.appendChild(page);
     });
+    scoreNoteAnchors = getScoreNoteAnchors();
   } catch (error) {
     console.error("MuseScore conversion failed:", error);
     container.innerHTML = "<p class=\"sheet-music-error\">Could not convert this MIDI file into sheet music.</p>";
@@ -189,40 +198,315 @@ async function getTotalBeats() {
   return totalBeats;
 }
 
-function detectNote(audioBuffer, timeInSeconds, duration) {
-    const sampleRate = audioBuffer.sampleRate;
-    const windowSize = 8192;
-    
-    const timingLeeway = 0.075;
-    const skipStart = duration * 0.23 + timingLeeway;
-    
-    const startSample = Math.floor((timeInSeconds + skipStart) * sampleRate);
-    const endSample = Math.min(startSample + windowSize, audioBuffer.length);
-    
-    if (startSample >= audioBuffer.length) return null;
-    
-    const channelData = audioBuffer.getChannelData(0);
-    let slice = channelData.slice(startSample, endSample);
-    
-    let filtered = new Float32Array(slice.length);
-    let prevSample = 0;
-    const alpha = 0.95;
-    for (let i = 0; i < slice.length; i++) {
-        filtered[i] = alpha * (filtered[i-1] || 0) + alpha * (slice[i] - prevSample);
-        prevSample = slice[i];
+function median(values) {
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+        ? (sorted[middle - 1] + sorted[middle]) / 2
+        : sorted[middle];
+}
+
+function getMonoSlice(audioBuffer, startSample, length) {
+    const slice = new Float32Array(length);
+    const channelCount = audioBuffer.numberOfChannels;
+
+    for (let channel = 0; channel < channelCount; channel++) {
+        const channelData = audioBuffer.getChannelData(channel);
+        for (let i = 0; i < length; i++) {
+            slice[i] += channelData[startSample + i] / channelCount;
+        }
     }
-    slice = filtered;
-    
-    const rms = Math.sqrt(slice.reduce((sum, val) => sum + val * val, 0) / slice.length);
+
+    // Remove DC offset and fade the edges so pitch detection is not biased by
+    // microphone pops or a note transition at either edge of the sample.
+    const average = slice.reduce((sum, sample) => sum + sample, 0) / slice.length;
+    for (let i = 0; i < slice.length; i++) {
+        const window = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (slice.length - 1));
+        slice[i] = (slice[i] - average) * window;
+    }
+
+    return slice;
+}
+
+function getCentsDifference(frequency, referenceFrequency) {
+    return 1200 * Math.log2(frequency / referenceFrequency);
+}
+
+function detectNote(audioBuffer, timeInSeconds, duration, expectedFrequency) {
+    const sampleRate = audioBuffer.sampleRate;
+    const timingOffset = Math.min(0.12, duration * 0.18);
+    const timingOffsets = [-timingOffset, -timingOffset / 2, 0, timingOffset / 2, timingOffset];
+    const candidates = [];
+
+    for (const offset of timingOffsets) {
+        const noteStart = timeInSeconds + offset + Math.min(0.08, duration * 0.18);
+        const noteEnd = timeInSeconds + offset + duration - Math.min(0.035, duration * 0.1);
+        const availableSamples = Math.floor((noteEnd - noteStart) * sampleRate);
+        const preferredWindowSize = Math.min(8192, Math.max(2048, Math.floor(duration * sampleRate * 0.42)));
+        const windowSize = Math.min(preferredWindowSize, availableSamples);
+
+        if (windowSize < 1024) continue;
+
+        const firstSample = Math.max(0, Math.floor(noteStart * sampleRate));
+        const lastStartSample = Math.min(
+            audioBuffer.length - windowSize,
+            Math.floor(noteEnd * sampleRate) - windowSize
+        );
+        if (lastStartSample < firstSample) continue;
+
+        const sampleStarts = [firstSample, Math.round((firstSample + lastStartSample) / 2), lastStartSample];
+        const detectedFrequencies = [];
+
+        for (const startSample of new Set(sampleStarts)) {
+            const slice = getMonoSlice(audioBuffer, startSample, windowSize);
+            const rms = Math.sqrt(slice.reduce((sum, value) => sum + value * value, 0) / slice.length);
+            if (rms < 0.0008) continue;
+
+            const detector = PitchDetector.forFloat32Array(slice.length);
+            const [frequency, clarity] = detector.findPitch(slice, sampleRate);
+
+            // The metronome is intentionally filtered out of the performance result.
+            if (frequency && Math.abs(frequency - 375) < 30) continue;
+            if (frequency && clarity >= 0.35) detectedFrequencies.push(frequency);
+        }
+
+        if (detectedFrequencies.length) {
+            candidates.push({ frequency: median(detectedFrequencies), offset });
+        }
+    }
+
+    // Prefer readings close to the expected note, but retain a lower-confidence
+    // fallback so a normal microphone recording is never treated as silence.
+    const plausibleCandidates = candidates.filter(({ frequency }) =>
+        Math.abs(getCentsDifference(frequency, expectedFrequency)) <= 700
+    );
+    const candidatePool = plausibleCandidates.length ? plausibleCandidates : candidates;
+    if (!candidatePool.length) return null;
+
+    return candidatePool.reduce((best, candidate) => {
+        const candidateScore = Math.abs(getCentsDifference(candidate.frequency, expectedFrequency)) + Math.abs(candidate.offset) * 100;
+        const bestScore = Math.abs(getCentsDifference(best.frequency, expectedFrequency)) + Math.abs(best.offset) * 100;
+        return candidateScore < bestScore ? candidate : best;
+    }).frequency;
+}
+
+function detectPitchWindow(audioBuffer, timeInSeconds, duration) {
+    const sampleRate = audioBuffer.sampleRate;
+    const windowSize = Math.min(4096, Math.floor(duration * sampleRate * 0.45));
+    const startSample = Math.max(0, Math.floor((timeInSeconds + Math.min(0.08, duration * 0.22)) * sampleRate));
+
+    if (windowSize < 1024 || startSample + windowSize > audioBuffer.length) return null;
+
+    const slice = getMonoSlice(audioBuffer, startSample, windowSize);
+    const rms = Math.sqrt(slice.reduce((sum, value) => sum + value * value, 0) / slice.length);
     if (rms < 0.0008) return null;
-    
+
     const detector = PitchDetector.forFloat32Array(slice.length);
-    const [freq, clarity] = detector.findPitch(slice, sampleRate);
-    
-    if (freq && Math.abs(freq - 375) < 30) return null;
-    
-    if (!freq || clarity < 0.35) return null;
-    return freq;
+    const [frequency, clarity] = detector.findPitch(slice, sampleRate);
+    return frequency && clarity >= 0.3 && Math.abs(frequency - 375) >= 30 ? frequency : null;
+}
+
+function estimateRecordingOffset(audioBuffer, notes, analysisBpm) {
+    const secondsPerBeat = 60 / analysisBpm;
+    const offsets = Array.from({ length: 17 }, (_, index) => (index - 8) * 0.15);
+    const sampleNotes = notes.filter((note) => note.note !== "rest").slice(0, 16);
+    let best = { offset: 0, score: 0 };
+
+    for (const offset of offsets) {
+        let score = 0;
+        for (const note of sampleNotes) {
+            const startBeat = Number.isFinite(note.startBeat) ? note.startBeat : note.time / (60 / analysisBpm);
+            const durationBeats = Number.isFinite(note.durationBeats)
+                ? note.durationBeats
+                : note.duration / (60 / analysisBpm);
+            const time = startBeat * secondsPerBeat + offset;
+            const frequency = detectPitchWindow(audioBuffer, time, durationBeats * secondsPerBeat);
+            if (!frequency) continue;
+
+            const cents = Math.abs(getCentsDifference(frequency, Frequency(note.note).toFrequency()));
+            if (cents < 350) score += 1 - cents / 350;
+        }
+        if (score > best.score) best = { offset, score };
+    }
+
+    return best.score >= 1.5 ? best.offset : 0;
+}
+
+function buildExpectedNoteEvents(analysisBpm) {
+    const secondsPerBeat = 60 / analysisBpm;
+
+    return midiNotesData.flatMap((midiNote, noteIndex) => {
+        const noteName = Array.isArray(midiNote.note) ? midiNote.note[midiNote.note.length - 1] : midiNote.note;
+        if (!noteName || noteName === "rest") return [];
+
+        const startBeat = Number.isFinite(midiNote.startBeat)
+            ? midiNote.startBeat
+            : midiNote.time / (60 / (midiBpm ?? analysisBpm));
+        const durationBeats = Number.isFinite(midiNote.durationBeats)
+            ? midiNote.durationBeats
+            : midiNote.duration / (60 / (midiBpm ?? analysisBpm));
+        const time = startBeat * secondsPerBeat;
+
+        return [{
+            noteIndex,
+            noteName,
+            expectedFrequency: Frequency(noteName).toFrequency(),
+            time,
+            duration: durationBeats * secondsPerBeat,
+            scoreTime: startBeat * (60 / (midiBpm ?? analysisBpm)),
+            position: getScorePositionFromBeat(startBeat, midiTimeSignatures)
+        }];
+    });
+}
+
+function buildPitchTrack(audioBuffer) {
+    const sampleRate = audioBuffer.sampleRate;
+    const windowSize = 4096;
+    const hopSize = 2048;
+    const detector = PitchDetector.forFloat32Array(windowSize);
+    const track = [];
+
+    for (let startSample = 0; startSample + windowSize <= audioBuffer.length; startSample += hopSize) {
+        const slice = getMonoSlice(audioBuffer, startSample, windowSize);
+        const rms = Math.sqrt(slice.reduce((sum, value) => sum + value * value, 0) / slice.length);
+        if (rms < 0.0008) continue;
+
+        const [frequency, clarity] = detector.findPitch(slice, sampleRate);
+        if (!frequency || clarity < 0.35 || frequency < 60 || frequency > 1200) continue;
+        if (Math.abs(frequency - 375) < 30) continue;
+
+        track.push({ time: (startSample + windowSize / 2) / sampleRate, frequency, clarity });
+    }
+
+    return track;
+}
+
+function framesForNote(track, note, offset) {
+    const start = note.time + offset + Math.min(0.06, note.duration * 0.2);
+    const end = note.time + offset + note.duration - Math.min(0.04, note.duration * 0.12);
+    return track.filter((frame) => frame.time >= start && frame.time <= end);
+}
+
+function estimateTrackOffset(track, expectedNotes) {
+    const alignmentNotes = expectedNotes.filter((note) => note.time < 24).slice(0, 32);
+    const offsets = Array.from({ length: 61 }, (_, index) => (index - 30) * 0.05);
+    let best = { offset: 0, score: 0 };
+
+    for (const offset of offsets) {
+        let score = 0;
+        for (const note of alignmentNotes) {
+            const closestCents = framesForNote(track, note, offset).reduce((closest, frame) =>
+                Math.min(closest, Math.abs(getCentsDifference(frame.frequency, note.expectedFrequency))),
+                Infinity
+            );
+            if (closestCents < 300) score += 1 - closestCents / 300;
+        }
+        if (score > best.score) best = { offset, score };
+    }
+
+    return best.score >= 2 ? best.offset : 0;
+}
+
+function getScoreSegmentAtTime(timeInSeconds) {
+    if (!scoreSegmentPositions?.events?.length || !scoreSegmentPositions?.elements?.length) {
+        return null;
+    }
+
+    const targetPosition = timeInSeconds * 1000;
+    const nearestEvent = scoreSegmentPositions.events.reduce((nearest, event) =>
+        Math.abs(event.position - targetPosition) < Math.abs(nearest.position - targetPosition)
+            ? event
+            : nearest
+    );
+
+    return scoreSegmentPositions.elements.find((element) => element.id === nearestEvent.elid) ?? null;
+}
+
+function getScoreNoteAnchors() {
+    const pages = document.querySelectorAll("#sheet-music-container svg");
+    const anchors = [];
+
+    pages.forEach((page, pageIndex) => {
+        const noteheads = [...page.querySelectorAll(".Note")].map((notehead) => {
+            const transform = notehead.getAttribute("transform") ?? "";
+            const values = transform.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+            return { page: pageIndex, x: values.at(-2), y: values.at(-1), sx: 36, sy: 27 };
+        }).filter(({ x, y }) => Number.isFinite(x) && Number.isFinite(y));
+
+        // SVG output has no stable note IDs. Group noteheads into horizontal staff
+        // systems, then read each system left-to-right as a reliable fallback.
+        const systems = [];
+        for (const anchor of noteheads.sort((a, b) => a.y - b.y)) {
+            const system = systems.find((candidate) => Math.abs(candidate.centerY - anchor.y) < 170);
+            if (system) {
+                system.anchors.push(anchor);
+                system.centerY = (system.centerY * (system.anchors.length - 1) + anchor.y) / system.anchors.length;
+            } else {
+                systems.push({ centerY: anchor.y, anchors: [anchor] });
+            }
+        }
+
+        systems
+            .sort((a, b) => a.centerY - b.centerY)
+            .forEach((system) => anchors.push(...system.anchors.sort((a, b) => a.x - b.x)));
+    });
+
+    return anchors;
+}
+
+function clearScoreFeedback() {
+    document.querySelectorAll(".score-feedback, .score-feedback-legend").forEach((element) => element.remove());
+}
+
+function renderScoreFeedback(feedback) {
+    clearScoreFeedback();
+
+    const container = document.getElementById("sheet-music-container");
+    const pages = container.querySelectorAll("svg");
+    const markedFeedback = [];
+
+    for (const item of feedback) {
+        const segment = getScoreSegmentAtTime(item.scoreTime) ?? scoreNoteAnchors[item.noteIndex];
+        const page = segment ? pages[segment.page] : null;
+        if (!page) continue;
+
+        const marker = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        marker.classList.add("score-feedback", `score-feedback--${item.type}`);
+        marker.setAttribute("tabindex", "0");
+        marker.setAttribute("role", "img");
+        marker.setAttribute("aria-label", item.message);
+
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", String(segment.x + segment.sx / 2));
+        circle.setAttribute("cy", String(Math.max(36, segment.y - 38)));
+        circle.setAttribute("r", "26");
+        const markerColor = item.type === "flat" ? "#c9473b" : item.type === "sharp" ? "#d07b18" : "#6b7280";
+        circle.setAttribute("style", `fill: ${markerColor} !important; stroke: #ffffff !important; stroke-width: 4px;`);
+
+        const symbol = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        symbol.setAttribute("x", String(segment.x + segment.sx / 2));
+        symbol.setAttribute("y", String(Math.max(45, segment.y - 28)));
+        symbol.setAttribute("text-anchor", "middle");
+        symbol.setAttribute("style", "fill: #ffffff !important; font-family: Arial, sans-serif; font-size: 34px; font-weight: 800;");
+        symbol.textContent = item.type === "missing" ? "?" : item.type === "sharp" ? "↑" : "↓";
+
+        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+        title.textContent = item.message;
+        marker.append(circle, symbol, title);
+        page.appendChild(marker);
+        markedFeedback.push(item);
+    }
+
+    if (!markedFeedback.length) return;
+
+    const legend = document.createElement("div");
+    legend.className = "score-feedback-legend";
+    legend.innerHTML = `
+        <span><i class="score-feedback-key score-feedback-key--flat">↓</i> Flat</span>
+        <span><i class="score-feedback-key score-feedback-key--sharp">↑</i> Sharp</span>
+        <span><i class="score-feedback-key score-feedback-key--missing">?</i> No pitch</span>
+    `;
+    container.before(legend);
 }
 
 async function compareNotes() {
@@ -240,52 +524,58 @@ async function compareNotes() {
     }
 
     document.getElementById("output").innerText = "";
-    
-    // Use the tempo locked in when recording started. MIDI note.time is in the
-    // source file's original seconds, so it cannot be used after a BPM change.
+    const feedback = [];
     const analysisBpm = recordingBpm ?? getCurrentBpm();
-    const secondsPerBeat = 60 / analysisBpm;
+    const expectedNotes = buildExpectedNoteEvents(analysisBpm);
+    const pitchTrack = buildPitchTrack(recordingBuffer);
 
-    for (let i = 0; i < midiNotesData.length; i++) {
-        const midiNote = midiNotesData[i];
-        const startBeat = Number.isFinite(midiNote.startBeat) ? midiNote.startBeat : null;
-        const durationBeats = Number.isFinite(midiNote.durationBeats)
-          ? midiNote.durationBeats
-          : midiNote.duration / (60 / (midiBpm ?? analysisBpm));
-        const time = startBeat !== null
-          ? startBeat * secondsPerBeat
-          : midiNote.time * ((midiBpm ?? analysisBpm) / analysisBpm);
-        const duration = durationBeats * secondsPerBeat;
-        
-        let midiNoteName = Array.isArray(midiNote.note)
-            ? midiNote.note[midiNote.note.length - 1]
-            : midiNote.note;
-        
-        if (midiNoteName === "rest") continue;
-        
-        let detectedFreq = detectNote(recordingBuffer, time, duration);
-        
-        const position = midiNote.startBeat !== undefined
-          ? getScorePositionFromBeat(midiNote.startBeat, midiTimeSignatures)
-          : getScorePosition(time, analysisBpm, midiTimeSignatures);
+    if (!pitchTrack.length) {
+        document.getElementById("output").innerText = "No reliable sung pitch was found. Use headphones and record a clear, single voice.\n";
+        return;
+    }
 
-        if (!detectedFreq) {
-            document.getElementById("output").innerText += `Measure ${position.measureNumber}, Beat ${position.beat.toFixed(1)}: No pitch detected\n`;
+    const recordingOffset = estimateTrackOffset(pitchTrack, expectedNotes);
+    if (recordingOffset !== 0) {
+        document.getElementById("output").innerText += `Aligned recording by ${recordingOffset > 0 ? "+" : ""}${recordingOffset.toFixed(2)} seconds.\n`;
+    }
+
+    let inTuneCount = 0;
+    let unmatchedCount = 0;
+    let recordingEnded = false;
+
+    for (const note of expectedNotes) {
+        if (note.time + recordingOffset >= recordingBuffer.duration - 0.03) {
+            document.getElementById("output").innerText += `Recording ended after Measure ${note.position.measureNumber}, Beat ${note.position.beat.toFixed(1)}.\n`;
+            recordingEnded = true;
+            break;
+        }
+
+        const plausibleFrames = framesForNote(pitchTrack, note, recordingOffset).filter((frame) =>
+            Math.abs(getCentsDifference(frame.frequency, note.expectedFrequency)) <= 700
+        );
+
+        if (plausibleFrames.length < 2) {
+            unmatchedCount++;
             continue;
         }
-        
-        const expectedFreq = Frequency(midiNoteName).toFrequency();
-        const centsOff = 1200 * Math.log2(detectedFreq / expectedFreq);
-        
-        if (Math.abs(centsOff) > 50) {
-            const direction = centsOff > 0 ? "sharp" : "flat";
-            document.getElementById("output").innerText += `Measure ${position.measureNumber}, Beat ${position.beat.toFixed(1)}: ${Math.abs(centsOff).toFixed(0)} cents too ${direction} (Expected: ${midiNoteName})\n`;
-            console.log(`${centsOff.toFixed(0)} cents ${direction}: Detected ${detectedFreq.toFixed(1)}Hz, Expected ${expectedFreq.toFixed(1)}Hz`);
-        } else {
-            console.log(`In tune: ${detectedFreq.toFixed(1)}Hz`);
+
+        const detectedFrequency = median(plausibleFrames.map((frame) => frame.frequency));
+        const centsOff = getCentsDifference(detectedFrequency, note.expectedFrequency);
+
+        if (Math.abs(centsOff) <= 50) {
+            inTuneCount++;
+            continue;
         }
+
+        const direction = centsOff > 0 ? "sharp" : "flat";
+        const message = `Measure ${note.position.measureNumber}, Beat ${note.position.beat.toFixed(1)}: ${Math.abs(centsOff).toFixed(0)} cents too ${direction} (Expected: ${note.noteName})`;
+        document.getElementById("output").innerText += `${message}\n`;
+        feedback.push({ type: direction, message, noteIndex: note.noteIndex, scoreTime: note.scoreTime });
     }
-    document.getElementById("output").innerText += '\nAnalysis complete. Remember that 100 cents is one semitone.\nIf you see no messages, you were in tune the whole time :)\n If not, don\'t be discouraged! Practice makes perfect, and practicing with OnSight might make more than perfect...';
+
+    renderScoreFeedback(feedback);
+    const reviewedCount = inTuneCount + feedback.length;
+    document.getElementById("output").innerText += `\nContinuous pitch review complete: ${inTuneCount} in tune, ${feedback.length} confirmed pitch issues, ${unmatchedCount} unconfirmed notes.${recordingEnded ? "" : ` ${reviewedCount} notes were assessed.`}`;
 }
 
 function durationToBeats(d) {
@@ -1026,7 +1316,14 @@ function startRecording() {
         return;
     }
 
-    navigator.mediaDevices.getUserMedia({ audio: true })
+    navigator.mediaDevices.getUserMedia({
+        audio: {
+            autoGainControl: true,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true
+        }
+    })
         .then(stream => {
             document.getElementById("SheetMusic").scrollIntoView({
             behavior: "smooth",
