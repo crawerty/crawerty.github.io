@@ -53,8 +53,12 @@ async function renderMuseScore(midiData) {
     }
 
     currentScoreInstance = await WebMscore.load("midi", midiData);
-    const svgOutput = await currentScoreInstance.saveSvg();
-    const svgPages = Array.isArray(svgOutput) ? svgOutput : [svgOutput];
+    const pageCount = await currentScoreInstance.npages();
+    const svgPages = await Promise.all(
+      Array.from({ length: pageCount }, (_, pageNumber) =>
+        currentScoreInstance.saveSvg(pageNumber)
+      )
+    );
 
     container.replaceChildren();
     svgPages.forEach((svgString) => {
