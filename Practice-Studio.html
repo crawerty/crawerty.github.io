@@ -38,14 +38,18 @@
         <div class="tempo-row">
           <div>
             <p class="panel-label">Tempo</p>
-            <label for="bpm">Beats per minute</label>
+            <p class="tempo-description">Set your pace and count-in.</p>
           </div>
-          <input type="number" id="bpm" value="100" min="20" max="300" step="1" />
+          <div class="tempo-inputs">
+            <label for="bpm">BPM<input type="number" id="bpm" value="100" min="20" max="300" step="1" /></label>
+            <label for="countInBeats" title="Count-in beats">Count-in<input type="number" id="countInBeats" value="4" min="0" step="1" /></label>
+          </div>
         </div>
         <div class="button-row">
           <button id="startMetronome">Start metronome</button>
           <button id="stopMetronome" disabled>Stop</button>
         </div>
+        <label class="volume-control" for="metronomeVolume">Metronome volume <output id="metronomeVolumeValue">75%</output><input type="range" id="metronomeVolume" min="0" max="100" value="75" /></label>
       </div>
 
       <div class="control-panel">
@@ -64,7 +68,28 @@
           <button id="record">Start recording</button>
           <button id="stop" disabled>Stop</button>
         </div>
+        <div class="button-row recording-mode-row" aria-label="Recording accompaniment">
+          <button id="WTrack" class="recording-mode is-selected" type="button" aria-pressed="true">With track</button>
+          <button id="WOTrack" class="recording-mode" type="button" aria-pressed="false">Without track</button>
+        </div>
         <audio id="player" controls></audio>
+      </div>
+    </section>
+
+    <section class="practice-range" aria-labelledby="practice-range-heading">
+      <div>
+        <p class="eyebrow">Practice tools</p>
+        <h2 id="practice-range-heading">Loop a range</h2>
+        <p>Select whole measures to repeat with the practice track. Recording feedback will focus on the same range.</p>
+      </div>
+      <div class="loop-controls">
+        <label for="loopStartMeasure">Start measure<input type="number" id="loopStartMeasure" min="1" step="1" disabled /></label>
+        <label for="loopEndMeasure">End measure<input type="number" id="loopEndMeasure" min="1" step="1" disabled /></label>
+        <div class="button-row">
+          <button id="setLoop" disabled>Set loop</button>
+          <button id="clearLoop" class="secondary-button" disabled>Clear</button>
+        </div>
+        <p id="loopStatus" class="loop-status">Upload a MIDI file to set a practice range.</p>
       </div>
     </section>
 

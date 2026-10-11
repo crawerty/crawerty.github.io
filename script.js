@@ -11,6 +11,16 @@ const playPracticeTrackBtn = document.getElementById("playPracticeTrack");
 const stopPracticeTrackBtn = document.getElementById("stopPracticeTrack");
 const analyzeOutput = document.getElementById("analyze");
 const bpmInput = document.getElementById("bpm");
+const metronomeVolumeInput = document.getElementById("metronomeVolume");
+const metronomeVolumeValue = document.getElementById("metronomeVolumeValue");
+const countInBeatsInput = document.getElementById("countInBeats");
+const loopStartMeasureInput = document.getElementById("loopStartMeasure");
+const loopEndMeasureInput = document.getElementById("loopEndMeasure");
+const setLoopBtn = document.getElementById("setLoop");
+const clearLoopBtn = document.getElementById("clearLoop");
+const loopStatus = document.getElementById("loopStatus");
+const WTrackBtn = document.getElementById("WTrack");
+const WOTrackBtn = document.getElementById("WOTrack");
 let recorder;
 let audioChunks = [];
 recordBtn.addEventListener("click", startRecording);
@@ -18,6 +28,9 @@ stopBtn.addEventListener("click", stopRecording);
 let ctx = new AudioContext();
 let metInterval;
 let nextMetronomeClickTime = 0;
+let nextMetronomeBeat = 0;
+let metronomeRange = null;
+let mechanicalTickBuffer = null;
 const metronomeLookAheadMs = 25;
 const metronomeScheduleAheadSeconds = 0.1;
 recordBtn.disabled = false;
@@ -27,8 +40,15 @@ stopMetronome.addEventListener("click", stopMet);
 stopMetronome.disabled = true;
 playPracticeTrackBtn.addEventListener("click", startPracticeTrack);
 stopPracticeTrackBtn.addEventListener("click", stopPracticeTrack);
+setLoopBtn?.addEventListener("click", setPracticeLoop);
+clearLoopBtn?.addEventListener("click", clearPracticeLoop);
+WTrackBtn?.addEventListener("click", () => setRecordingMode(true));
+WOTrackBtn?.addEventListener("click", () => setRecordingMode(false));
+metronomeVolumeInput?.addEventListener("input", updateMetronomeVolumeLabel);
 let midiBpm = null;
 let recordingBpm = null;
+let activeLoopRange = null;
+let recordingLoopRange = null;
 let midiNotesData = null;
 let midiTimeSignatures = [{ startBeat: 0, numerator: 4, denominator: 4 }];
 let midiClef = "treble";
@@ -37,6 +57,35 @@ let scoreSegmentPositions = null;
 let scoreNoteAnchors = [];
 let practiceOscillators = [];
 let practiceTrackStopTimer = null;
+let practiceTrackLoopId = 0;
+let recordWithTrack = true;
+let scoreGuideFrame = null;
+let scoreGuideStartTime = 0;
+let scoreGuideBpm = 120;
+let scoreGuideRange = null;
+let scoreGuideLoop = false;
+
+// CC0 recording: go1dfish, “Metronome De Maezel” (ccMixter), trimmed to one tick at runtime.
+fetch("assets/mechanical-metronome.mp3")
+  .then((response) => {
+    if (!response.ok) throw new Error("Mechanical metronome sample could not be loaded.");
+    return response.arrayBuffer();
+  })
+  .then((audioData) => ctx.decodeAudioData(audioData))
+  .then((recording) => {
+    const channel = recording.getChannelData(0);
+    let peakIndex = 0;
+    for (let index = 1; index < channel.length; index += 1) {
+      if (Math.abs(channel[index]) > Math.abs(channel[peakIndex])) peakIndex = index;
+    }
+    const start = Math.max(0, peakIndex - Math.floor(recording.sampleRate * 0.012));
+    const length = Math.min(Math.floor(recording.sampleRate * 0.18), recording.length - start);
+    mechanicalTickBuffer = ctx.createBuffer(recording.numberOfChannels, length, recording.sampleRate);
+    for (let channelIndex = 0; channelIndex < recording.numberOfChannels; channelIndex += 1) {
+      mechanicalTickBuffer.copyToChannel(recording.getChannelData(channelIndex).slice(start, start + length), channelIndex);
+    }
+  })
+  .catch((error) => console.warn("Using the built-in metronome fallback:", error));
 
 async function renderMuseScore(midiData) {
   const container = document.getElementById("sheet-music-container");
@@ -332,23 +381,19 @@ function estimateRecordingOffset(audioBuffer, notes, analysisBpm) {
     return best.score >= 1.5 ? best.offset : 0;
 }
 
-function buildExpectedNoteEvents(analysisBpm) {
+function buildExpectedNoteEvents(analysisBpm, range = recordingLoopRange) {
     const secondsPerBeat = 60 / analysisBpm;
 
-    return midiNotesData.flatMap((midiNote, noteIndex) => {
+    return getNotesInRange(range, analysisBpm).flatMap((midiNote) => {
         const noteName = Array.isArray(midiNote.note) ? midiNote.note[midiNote.note.length - 1] : midiNote.note;
         if (!noteName || noteName === "rest") return [];
 
-        const startBeat = Number.isFinite(midiNote.startBeat)
-            ? midiNote.startBeat
-            : midiNote.time / (60 / (midiBpm ?? analysisBpm));
-        const durationBeats = Number.isFinite(midiNote.durationBeats)
-            ? midiNote.durationBeats
-            : midiNote.duration / (60 / (midiBpm ?? analysisBpm));
-        const time = startBeat * secondsPerBeat;
+        const startBeat = midiNote.startBeat;
+        const durationBeats = midiNote.durationBeats;
+        const time = (startBeat - (range?.startBeat ?? 0)) * secondsPerBeat;
 
         return [{
-            noteIndex,
+            noteIndex: midiNote.noteIndex,
             noteName,
             expectedFrequency: Frequency(noteName).toFrequency(),
             time,
@@ -668,6 +713,139 @@ function getCurrentBpm() {
   }
 
   return midiBpm ?? 120;
+}
+
+function setRecordingMode(withTrack) {
+  recordWithTrack = withTrack;
+  WTrackBtn?.classList.toggle("is-selected", withTrack);
+  WOTrackBtn?.classList.toggle("is-selected", !withTrack);
+  WTrackBtn?.setAttribute("aria-pressed", String(withTrack));
+  WOTrackBtn?.setAttribute("aria-pressed", String(!withTrack));
+}
+
+function getMetronomeVolume() {
+  return Math.max(0, Math.min(1, Number(metronomeVolumeInput?.value ?? 75) / 100));
+}
+
+function updateMetronomeVolumeLabel() {
+  if (metronomeVolumeValue && metronomeVolumeInput) {
+    metronomeVolumeValue.value = `${metronomeVolumeInput.value}%`;
+    metronomeVolumeValue.textContent = `${metronomeVolumeInput.value}%`;
+  }
+}
+
+function getCountInBeats() {
+  const typedValue = countInBeatsInput?.value.trim();
+  const typedCount = Number(typedValue);
+
+  if (typedValue && Number.isFinite(typedCount) && typedCount >= 0) {
+    return Math.floor(typedCount);
+  }
+
+  return 4;
+}
+
+function getNoteBeatTiming(note, bpm) {
+  return {
+    startBeat: Number.isFinite(note.startBeat)
+      ? note.startBeat
+      : note.time / (60 / (midiBpm ?? bpm)),
+    durationBeats: Number.isFinite(note.durationBeats)
+      ? note.durationBeats
+      : note.duration / (60 / (midiBpm ?? bpm))
+  };
+}
+
+function getMeasureRanges() {
+  if (!midiNotesData?.length) return [];
+
+  const finalBeat = Math.max(...midiNotesData.map((note) => {
+    const timing = getNoteBeatTiming(note, midiBpm ?? getCurrentBpm());
+    return timing.startBeat + timing.durationBeats;
+  }));
+  const ranges = [];
+  let measureNumber = 1;
+  let startBeat = 0;
+
+  while (startBeat < finalBeat - 0.001) {
+    const signature = getTimeSignatureAtBeat(startBeat, midiTimeSignatures);
+    const measureBeats = getMeasureQuarterBeats(signature);
+    const nextSignature = midiTimeSignatures.find((item) => item.startBeat > startBeat + 0.001);
+    const endBeat = Math.min(startBeat + measureBeats, nextSignature?.startBeat ?? Infinity);
+
+    if (endBeat <= startBeat + 0.001) break;
+    ranges.push({ measureNumber, startBeat, endBeat });
+    startBeat = endBeat;
+    measureNumber += 1;
+  }
+
+  return ranges;
+}
+
+function updateLoopControls() {
+  const measures = getMeasureRanges();
+  const hasMeasures = measures.length > 0;
+  const lastMeasure = measures.length || 1;
+
+  [loopStartMeasureInput, loopEndMeasureInput].forEach((input) => {
+    if (!input) return;
+    input.disabled = !hasMeasures;
+    input.max = String(lastMeasure);
+  });
+  if (setLoopBtn) setLoopBtn.disabled = !hasMeasures;
+  if (clearLoopBtn) clearLoopBtn.disabled = !activeLoopRange;
+
+  if (!hasMeasures) return;
+  if (!loopStartMeasureInput.value) loopStartMeasureInput.value = "1";
+  if (!loopEndMeasureInput.value) loopEndMeasureInput.value = String(lastMeasure);
+}
+
+function setPracticeLoop() {
+  const measures = getMeasureRanges();
+  const startMeasure = Number(loopStartMeasureInput?.value);
+  const endMeasure = Number(loopEndMeasureInput?.value);
+
+  if (!Number.isInteger(startMeasure) || !Number.isInteger(endMeasure) || startMeasure < 1 || endMeasure < startMeasure || endMeasure > measures.length) {
+    loopStatus.textContent = `Choose measures between 1 and ${measures.length}, with the end at or after the start.`;
+    loopStatus.classList.remove("is-active");
+    return;
+  }
+
+  activeLoopRange = {
+    startMeasure,
+    endMeasure,
+    startBeat: measures[startMeasure - 1].startBeat,
+    endBeat: measures[endMeasure - 1].endBeat
+  };
+  loopStatus.textContent = `Looping measures ${startMeasure}–${endMeasure}. Practice-track playback and recording review will use this range.`;
+  loopStatus.classList.add("is-active");
+  updateLoopControls();
+}
+
+function clearPracticeLoop() {
+  activeLoopRange = null;
+  const measures = getMeasureRanges();
+  if (loopStartMeasureInput) loopStartMeasureInput.value = "1";
+  if (loopEndMeasureInput) loopEndMeasureInput.value = String(measures.length || 1);
+  if (loopStatus) {
+    loopStatus.textContent = "No loop is set. The full score will play and be reviewed.";
+    loopStatus.classList.remove("is-active");
+  }
+  updateLoopControls();
+}
+
+function getNotesInRange(range, bpm) {
+  return midiNotesData.flatMap((note, noteIndex) => {
+    const { startBeat, durationBeats } = getNoteBeatTiming(note, bpm);
+    const endBeat = startBeat + durationBeats;
+    const rangeStart = range?.startBeat ?? 0;
+    const rangeEnd = range?.endBeat ?? Infinity;
+    const trimmedStartBeat = Math.max(startBeat, rangeStart);
+    const trimmedEndBeat = Math.min(endBeat, rangeEnd);
+
+    if (trimmedEndBeat <= trimmedStartBeat + 0.001) return [];
+    return [{ ...note, noteIndex, startBeat: trimmedStartBeat, durationBeats: trimmedEndBeat - trimmedStartBeat }];
+  });
 }
 
 function getStaveWidth(measure, isFirstInLine, shouldShowTimeSignature) {
@@ -1042,6 +1220,15 @@ async function processAndRender() {
   midiTimeSignatures = timeSignatures;
   bpmInput.value = midiBpm;
   recordingBpm = null;
+  activeLoopRange = null;
+  recordingLoopRange = null;
+  if (loopStartMeasureInput) loopStartMeasureInput.value = "1";
+  if (loopEndMeasureInput) loopEndMeasureInput.value = "";
+  updateLoopControls();
+  if (loopStatus) {
+    loopStatus.textContent = "No loop is set. The full score will play and be reviewed.";
+    loopStatus.classList.remove("is-active");
+  }
   playPracticeTrackBtn.disabled = notes.length === 0;
   await renderMuseScore(midiData);
 }
@@ -1170,17 +1357,126 @@ function drawStaff(events, timeSignatures = midiTimeSignatures) {
   }
 }
 
-function playClickAt(startTime) {
-    const o = ctx.createOscillator();
+function clearScoreGuide() {
+  if (scoreGuideFrame) cancelAnimationFrame(scoreGuideFrame);
+  scoreGuideFrame = null;
+  document.querySelectorAll(".metronome-guide").forEach((guide) => guide.remove());
+}
+
+function getGuidePosition(beat) {
+  if (!midiNotesData?.length || !scoreNoteAnchors.length) return null;
+
+  let noteIndex = 0;
+  for (let index = 0; index < midiNotesData.length; index += 1) {
+    const timing = getNoteBeatTiming(midiNotesData[index], scoreGuideBpm);
+    if (timing.startBeat <= beat + 0.001) noteIndex = index;
+    else break;
+  }
+
+  const current = scoreNoteAnchors[noteIndex];
+  const next = scoreNoteAnchors[noteIndex + 1];
+  if (!current) return null;
+
+  const timing = getNoteBeatTiming(midiNotesData[noteIndex], scoreGuideBpm);
+  const nextTiming = midiNotesData[noteIndex + 1]
+    ? getNoteBeatTiming(midiNotesData[noteIndex + 1], scoreGuideBpm)
+    : null;
+  const progress = next && nextTiming && next.page === current.page && nextTiming.startBeat > timing.startBeat
+    ? Math.max(0, Math.min(1, (beat - timing.startBeat) / (nextTiming.startBeat - timing.startBeat)))
+    : 0;
+
+  // Anchor the guide to the notehead's left edge at the exact moment the note starts.
+  return { page: current.page, x: current.x + ((next?.x ?? current.x) - current.x) * progress };
+}
+
+function startScoreGuide(startTime, bpm, range = null, loop = true) {
+  clearScoreGuide();
+  scoreGuideStartTime = startTime;
+  scoreGuideBpm = bpm;
+  scoreGuideRange = range ? { ...range } : null;
+  scoreGuideLoop = loop;
+
+  const updateGuide = () => {
+    const secondsPerBeat = 60 / scoreGuideBpm;
+    const rangeStart = scoreGuideRange?.startBeat ?? 0;
+    const rangeEnd = scoreGuideRange?.endBeat ?? getMeasureRanges().at(-1)?.endBeat ?? 0;
+    const rangeLength = Math.max(0.001, rangeEnd - rangeStart);
+    const elapsedBeats = Math.max(0, (ctx.currentTime - scoreGuideStartTime) / secondsPerBeat);
+    const beat = rangeStart + (scoreGuideLoop ? elapsedBeats % rangeLength : elapsedBeats);
+
+    if (!scoreGuideLoop && beat > rangeEnd + 0.05) {
+      clearScoreGuide();
+      return;
+    }
+
+    const position = getGuidePosition(beat);
+    if (position) {
+      const pages = document.querySelectorAll("#sheet-music-container svg");
+      const page = pages[position.page];
+      if (page) {
+        let guide = page.querySelector(".metronome-guide");
+        if (!guide) {
+          document.querySelectorAll(".metronome-guide").forEach((item) => item.remove());
+          guide = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          guide.classList.add("metronome-guide");
+          guide.setAttribute("aria-hidden", "true");
+          const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          const viewBox = page.viewBox.baseVal;
+          line.setAttribute("y1", "0");
+          line.setAttribute("y2", String(viewBox.height || page.clientHeight));
+          guide.appendChild(line);
+          page.appendChild(guide);
+        }
+        guide.querySelector("line").setAttribute("x1", String(position.x));
+        guide.querySelector("line").setAttribute("x2", String(position.x));
+      }
+    }
+    scoreGuideFrame = requestAnimationFrame(updateGuide);
+  };
+  scoreGuideFrame = requestAnimationFrame(updateGuide);
+}
+
+function playClickAt(startTime, isMeasureStart = false) {
+    const volume = getMetronomeVolume();
+    if (volume === 0) return;
+    if (mechanicalTickBuffer) {
+        const source = ctx.createBufferSource();
+        const gain = ctx.createGain();
+        source.buffer = mechanicalTickBuffer;
+        // The accented downbeat is slightly lower and fuller, like a mechanical pendulum's weighted swing.
+        source.playbackRate.value = isMeasureStart ? 0.88 : 1;
+        gain.gain.setValueAtTime((isMeasureStart ? 0.95 : 0.68) * volume, startTime);
+        source.connect(gain);
+        gain.connect(ctx.destination);
+        source.start(startTime);
+        return;
+    }
+
+    // Layer a pitched strike and a tiny burst of noise for a woodblock-style click.
+    const oscillator = ctx.createOscillator();
     const gain = ctx.createGain();
-    o.connect(gain);
+    oscillator.connect(gain);
     gain.connect(ctx.destination);
-    gain.gain.setValueAtTime(0.25, startTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.02);
-    o.type = "sine";
-    o.frequency.value = 375;
-    o.start(startTime);
-    o.stop(startTime + 0.02);
+    oscillator.type = "triangle";
+    oscillator.frequency.setValueAtTime(isMeasureStart ? 1450 : 1950, startTime);
+    oscillator.frequency.exponentialRampToValueAtTime(isMeasureStart ? 850 : 1250, startTime + 0.045);
+    gain.gain.setValueAtTime(0.0001, startTime);
+    gain.gain.exponentialRampToValueAtTime((isMeasureStart ? 0.3 : 0.18) * volume, startTime + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.055);
+    oscillator.start(startTime);
+    oscillator.stop(startTime + 0.06);
+
+    const noiseBuffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.025), ctx.sampleRate);
+    const noise = noiseBuffer.getChannelData(0);
+    for (let index = 0; index < noise.length; index += 1) noise[index] = (Math.random() * 2 - 1) * (1 - index / noise.length);
+    const noiseSource = ctx.createBufferSource();
+    const noiseGain = ctx.createGain();
+    noiseSource.buffer = noiseBuffer;
+    noiseSource.connect(noiseGain);
+    noiseGain.connect(ctx.destination);
+    noiseGain.gain.setValueAtTime((isMeasureStart ? 0.09 : 0.045) * volume, startTime);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.025);
+    noiseSource.start(startTime);
 }
 
 function click() {
@@ -1192,18 +1488,26 @@ function scheduleMetronomeClicks() {
     const secondsPerBeat = 60 / bpm;
 
     while (nextMetronomeClickTime < ctx.currentTime + metronomeScheduleAheadSeconds) {
-        playClickAt(nextMetronomeClickTime);
+        const scorePosition = getScorePositionFromBeat(nextMetronomeBeat, midiTimeSignatures);
+        playClickAt(nextMetronomeClickTime, Math.abs(scorePosition.beat - 1) < 0.001);
         nextMetronomeClickTime += secondsPerBeat;
+        nextMetronomeBeat += 1;
+        if (metronomeRange && nextMetronomeBeat >= metronomeRange.endBeat - 0.001) {
+            nextMetronomeBeat = metronomeRange.startBeat;
+        }
     }
 
     metInterval = setTimeout(scheduleMetronomeClicks, metronomeLookAheadMs);
 }
 
-function startMet() {
+function startMet({ guideStartTime = nextMetronomeClickTime || ctx.currentTime, guideRange = activeLoopRange, guideLoop = true } = {}) {
     if (ctx.state === "suspended") ctx.resume();
     clearTimeout(metInterval);
-    nextMetronomeClickTime = ctx.currentTime;
+    if (nextMetronomeClickTime == 0) nextMetronomeClickTime = ctx.currentTime;
+    metronomeRange = guideLoop && guideRange ? { ...guideRange } : null;
+    nextMetronomeBeat = metronomeRange?.startBeat ?? 0;
     scheduleMetronomeClicks();
+    startScoreGuide(guideStartTime, getCurrentBpm(), guideRange, guideLoop);
     startMetronome.disabled = true;
     stopMetronome.disabled = false;
 }
@@ -1211,28 +1515,46 @@ function startMet() {
 function stopMet() {
     clearTimeout(metInterval);
     metInterval = null;
+    nextMetronomeClickTime = 0;
+    nextMetronomeBeat = 0;
+    metronomeRange = null;
     startMetronome.disabled = false;
     stopMetronome.disabled = true;
+    clearScoreGuide();
+}
+
+function playPianoNoteAt(noteName, startTime, duration = 1, volume = 0.14) {
+  const output = ctx.createGain();
+  const releaseTime = Math.max(0.18, duration);
+  output.connect(ctx.destination);
+  output.gain.setValueAtTime(0.0001, startTime);
+  output.gain.exponentialRampToValueAtTime(volume, startTime + 0.012);
+  output.gain.exponentialRampToValueAtTime(Math.max(0.0001, volume * 0.18), startTime + Math.min(0.35, releaseTime * 0.28));
+  output.gain.exponentialRampToValueAtTime(0.0001, startTime + releaseTime);
+
+  const harmonics = [[1, 1], [2, 0.42], [3, 0.2], [4, 0.08]];
+  return harmonics.map(([multiple, level]) => {
+    const oscillator = ctx.createOscillator();
+    const harmonicGain = ctx.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.value = Frequency(noteName).toFrequency() * multiple;
+    harmonicGain.gain.value = level;
+    oscillator.connect(harmonicGain);
+    harmonicGain.connect(output);
+    oscillator.start(startTime);
+    oscillator.stop(startTime + releaseTime + 0.03);
+    return oscillator;
+  });
 }
 
 function playPracticeNoteAt(noteName, startTime, duration) {
-  const oscillator = ctx.createOscillator();
-  const gain = ctx.createGain();
-  oscillator.type = "triangle";
-  oscillator.frequency.value = Frequency(noteName).toFrequency();
-  oscillator.connect(gain);
-  gain.connect(ctx.destination);
-
-  gain.gain.setValueAtTime(0.0001, startTime);
-  gain.gain.exponentialRampToValueAtTime(0.12, startTime + 0.015);
-  gain.gain.exponentialRampToValueAtTime(0.0001, startTime + Math.max(0.03, duration));
-  oscillator.start(startTime);
-  oscillator.stop(startTime + Math.max(0.04, duration) + 0.02);
-
-  practiceOscillators.push(oscillator);
-  oscillator.onended = () => {
-    practiceOscillators = practiceOscillators.filter((item) => item !== oscillator);
-  };
+  const oscillators = playPianoNoteAt(noteName, startTime, duration, 0.12);
+  practiceOscillators.push(...oscillators);
+  oscillators.forEach((oscillator) => {
+    oscillator.onended = () => {
+      practiceOscillators = practiceOscillators.filter((item) => item !== oscillator);
+    };
+  });
 }
 
 function finishPracticeTrack() {
@@ -1240,6 +1562,26 @@ function finishPracticeTrack() {
   practiceOscillators = [];
   playPracticeTrackBtn.disabled = midiNotesData === null || midiNotesData.length === 0;
   stopPracticeTrackBtn.disabled = true;
+  stopMet();
+}
+
+function schedulePracticeRange(range, bpm, startTime) {
+  const secondsPerBeat = 60 / bpm;
+  const rangeStartBeat = range?.startBeat ?? 0;
+  const notes = getNotesInRange(range, bpm);
+  let trackEnd = range ? (range.endBeat - range.startBeat) * secondsPerBeat : 0;
+
+  notes.forEach((note) => {
+    const noteName = Array.isArray(note.note) ? note.note[note.note.length - 1] : note.note;
+    if (!noteName || noteName === "rest") return;
+
+    const duration = Math.max(0.05, note.durationBeats * secondsPerBeat);
+    const noteStart = (note.startBeat - rangeStartBeat) * secondsPerBeat;
+    playPracticeNoteAt(noteName, startTime + noteStart, duration);
+    trackEnd = Math.max(trackEnd, noteStart + duration);
+  });
+
+  return trackEnd;
 }
 
 async function startPracticeTrack() {
@@ -1252,32 +1594,34 @@ async function startPracticeTrack() {
   if (ctx.state === "suspended") await ctx.resume();
 
   const bpm = getCurrentBpm();
-  const secondsPerBeat = 60 / bpm;
   const startTime = ctx.currentTime + 0.08;
-  let trackEnd = 0;
 
-  midiNotesData.forEach((note) => {
-    const noteName = Array.isArray(note.note) ? note.note[note.note.length - 1] : note.note;
-    if (!noteName || noteName === "rest") return;
-
-    const startBeat = Number.isFinite(note.startBeat)
-      ? note.startBeat
-      : note.time / (60 / (midiBpm ?? bpm));
-    const durationBeats = Number.isFinite(note.durationBeats)
-      ? note.durationBeats
-      : note.duration / (60 / (midiBpm ?? bpm));
-    const duration = Math.max(0.05, durationBeats * secondsPerBeat);
-
-    playPracticeNoteAt(noteName, startTime + startBeat * secondsPerBeat, duration);
-    trackEnd = Math.max(trackEnd, (startBeat * secondsPerBeat) + duration);
-  });
+  nextMetronomeClickTime = startTime;
+  startMet({ guideStartTime: startTime, guideRange: activeLoopRange, guideLoop: Boolean(activeLoopRange) });
 
   playPracticeTrackBtn.disabled = true;
   stopPracticeTrackBtn.disabled = false;
-  practiceTrackStopTimer = setTimeout(finishPracticeTrack, (trackEnd + 0.15) * 1000);
+  if (!activeLoopRange) {
+    const trackEnd = schedulePracticeRange(null, bpm, startTime);
+    practiceTrackStopTimer = setTimeout(finishPracticeTrack, (trackEnd + 0.15) * 1000);
+    return;
+  }
+
+  const loopId = practiceTrackLoopId;
+  const range = { ...activeLoopRange };
+  const scheduleLoopPass = (passStartTime) => {
+    if (loopId !== practiceTrackLoopId) return;
+    const passDuration = schedulePracticeRange(range, bpm, passStartTime);
+    practiceTrackStopTimer = setTimeout(
+      () => scheduleLoopPass(passStartTime + passDuration),
+      Math.max(0, (passStartTime + passDuration - ctx.currentTime - 0.06) * 1000)
+    );
+  };
+  scheduleLoopPass(startTime);
 }
 
 function stopPracticeTrack() {
+  practiceTrackLoopId += 1;
   if (practiceTrackStopTimer) {
     clearTimeout(practiceTrackStopTimer);
     practiceTrackStopTimer = null;
@@ -1293,20 +1637,12 @@ function stopPracticeTrack() {
   finishPracticeTrack();
 }
 
-function playStartingNoteAt(noteName, startTime, duration = 1) {
+function playStartingNoteAt(noteName, startTime, duration = 2.5) {
   if (ctx.state === "suspended") ctx.resume();
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  osc.type = "sine";
-  osc.frequency.value = Frequency(noteName).toFrequency();
-  gain.gain.setValueAtTime(0.5, startTime);
-  osc.start(startTime);
-  osc.stop(startTime + duration);
+  playPianoNoteAt(noteName, startTime, duration, 0.24);
 }
 
-function playStartingNote(noteName, duration = 1) {
+function playStartingNote(noteName, duration = 2.5) {
   playStartingNoteAt(noteName, ctx.currentTime, duration);
 }
 
@@ -1325,43 +1661,50 @@ function startRecording() {
         }
     })
         .then(stream => {
+            recordingLoopRange = activeLoopRange ? { ...activeLoopRange } : null;
             document.getElementById("SheetMusic").scrollIntoView({
-            behavior: "smooth",
-            block: "start"
+                behavior: "smooth",
+                block: "start"
             });
             if (ctx.state === "suspended") {
                 ctx.resume();
             }
-            let countdownDiv = document.createElement('div');
-            countdownDiv.id = 'countdown';
-            countdownDiv.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 120px; font-weight: bold; color: #6ac47e; z-index: 9999; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);';
-            document.body.appendChild(countdownDiv);
-            
-            let count = 4;
-            countdownDiv.innerText = count;
-            const firstNote = Array.isArray(midiNotesData[0].note)
-                    ? midiNotesData[0].note[midiNotesData[0].note.length - 1]
-                : midiNotesData[0].note;
-            
+            const count = getCountInBeats();
+            const firstPracticeNote = getNotesInRange(recordingLoopRange, getCurrentBpm())[0] ?? midiNotesData[0];
+            const firstNote = Array.isArray(firstPracticeNote.note)
+                    ? firstPracticeNote.note[firstPracticeNote.note.length - 1]
+                : firstPracticeNote.note;
             const bpm = getCurrentBpm();
             recordingBpm = bpm;
             const secondsPerBeat = 60 / bpm;
-            const firstClickTime = ctx.currentTime + 0.05;
+            recordBtn.disabled = true;
 
-            for (let beat = 0; beat < count; beat++) {
-                playClickAt(firstClickTime + beat * secondsPerBeat);
-            }
-            playStartingNoteAt(firstNote, firstClickTime, 1);
-
-            for (let beat = 1; beat < count; beat++) {
-                setTimeout(() => {
-                    countdownDiv.innerText = count - beat;
-                }, beat * secondsPerBeat * 1000);
-            }
+            // Let singers hear and match their pitch before the score and count-in appear.
+            playStartingNoteAt(firstNote, ctx.currentTime + 0.05, 3);
 
             setTimeout(() => {
-                countdownDiv.remove();
-                
+                let countdownDiv = null;
+                if (count > 0) {
+                    countdownDiv = document.createElement('div');
+                    countdownDiv.id = 'countdown';
+                    countdownDiv.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 120px; font-weight: bold; color: #6ac47e; z-index: 9999; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);';
+                    countdownDiv.innerText = count;
+                    document.body.appendChild(countdownDiv);
+                }
+
+                const firstClickTime = ctx.currentTime + 0.05;
+                for (let beat = 0; beat < count; beat++) {
+                    playClickAt(firstClickTime + beat * secondsPerBeat, beat === 0);
+                }
+                for (let beat = 1; beat < count; beat++) {
+                    setTimeout(() => {
+                        if (countdownDiv) countdownDiv.innerText = count - beat;
+                    }, beat * secondsPerBeat * 1000);
+                }
+
+                setTimeout(() => {
+                    if (countdownDiv) countdownDiv.remove();
+
                 recorder = new MediaRecorder(stream);
                 recorder.ondataavailable = event => {
                     audioChunks.push(event.data);
@@ -1377,16 +1720,28 @@ function startRecording() {
                 recordBtn.disabled = true;
                 stopBtn.disabled = false;
                 bpmInput.disabled = true;
-                startMet();
-            }, count * secondsPerBeat * 1000);
+                if (countInBeatsInput) countInBeatsInput.disabled = true;
+                if (recordWithTrack) {
+                  WTrackBtn && (WTrackBtn.disabled = true);
+                  WOTrackBtn && (WOTrackBtn.disabled = true);
+                  startPracticeTrack();
+                } else {
+                  startMet({ guideRange: recordingLoopRange, guideLoop: true });
+                }
+                }, count * secondsPerBeat * 1000);
+            }, 3050);
         });
 }
 
 function stopRecording() {
-    recorder.stop();
+    stopPracticeTrack();
+    if (recorder && recorder.state !== "inactive") recorder.stop();
     recordBtn.disabled = false;
     stopBtn.disabled = true;
     bpmInput.disabled = false;
+    if (countInBeatsInput) countInBeatsInput.disabled = false;
+    if (WTrackBtn) WTrackBtn.disabled = false;
+    if (WOTrackBtn) WOTrackBtn.disabled = false;
     stopMet();
 }
 
