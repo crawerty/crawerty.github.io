@@ -21,6 +21,7 @@ const clearLoopBtn = document.getElementById("clearLoop");
 const loopStatus = document.getElementById("loopStatus");
 const WTrackBtn = document.getElementById("WTrack");
 const WOTrackBtn = document.getElementById("WOTrack");
+const recordingHint = document.getElementById("recordingHint");
 let recorder;
 let audioChunks = [];
 recordBtn.addEventListener("click", startRecording);
@@ -87,7 +88,7 @@ fetch("assets/mechanical-metronome.mp3")
   })
   .catch((error) => console.warn("Using the built-in metronome fallback:", error));
 
-async function renderMuseScore(midiData) {
+async function renderMuseScore(midiData, displayMusicXml = null) {
   const container = document.getElementById("sheet-music-container");
   container.replaceChildren();
 
@@ -103,7 +104,16 @@ async function renderMuseScore(midiData) {
       currentScoreInstance = null;
     }
 
-    currentScoreInstance = await WebMscore.load("midi", midiData);
+    try {
+      currentScoreInstance = await WebMscore.load(
+        displayMusicXml ? "musicxml" : "midi",
+        displayMusicXml ? new TextEncoder().encode(displayMusicXml) : midiData
+      );
+    } catch (displayError) {
+      if (!displayMusicXml) throw displayError;
+      console.warn("Tenor notation could not be loaded; falling back to the MIDI score.", displayError);
+      currentScoreInstance = await WebMscore.load("midi", midiData);
+    }
     try {
       scoreSegmentPositions = await currentScoreInstance.segmentPositions();
     } catch (positionError) {
@@ -472,11 +482,22 @@ function getScoreNoteAnchors() {
     const anchors = [];
 
     pages.forEach((page, pageIndex) => {
+        const pageRect = page.getBoundingClientRect();
+        const viewBox = page.viewBox.baseVal;
+        if (!pageRect.width || !pageRect.height || !viewBox.width || !viewBox.height) return;
+
+        // Convert the rendered noteheads back into SVG coordinates. This respects
+        // the actual sheet width, responsive scaling, and MuseScore's transforms.
         const noteheads = [...page.querySelectorAll(".Note")].map((notehead) => {
-            const transform = notehead.getAttribute("transform") ?? "";
-            const values = transform.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
-            return { page: pageIndex, x: values.at(-2), y: values.at(-1), sx: 36, sy: 27 };
-        }).filter(({ x, y }) => Number.isFinite(x) && Number.isFinite(y));
+            const rect = notehead.getBoundingClientRect();
+            return {
+                page: pageIndex,
+                x: viewBox.x + (rect.left - pageRect.left) * viewBox.width / pageRect.width,
+                y: viewBox.y + (rect.top - pageRect.top) * viewBox.height / pageRect.height,
+                sx: rect.width * viewBox.width / pageRect.width,
+                sy: rect.height * viewBox.height / pageRect.height
+            };
+        }).filter(({ x, y, sx, sy }) => Number.isFinite(x) && Number.isFinite(y) && sx > 0 && sy > 0);
 
         // SVG output has no stable note IDs. Group noteheads into horizontal staff
         // systems, then read each system left-to-right as a reliable fallback.
@@ -493,7 +514,23 @@ function getScoreNoteAnchors() {
 
         systems
             .sort((a, b) => a.centerY - b.centerY)
-            .forEach((system) => anchors.push(...system.anchors.sort((a, b) => a.x - b.x)));
+            .forEach((system) => {
+                const onsets = [];
+                for (const anchor of system.anchors.sort((a, b) => a.x - b.x)) {
+                    const previous = onsets.at(-1);
+                    const center = anchor.x + anchor.sx / 2;
+                    const previousCenter = previous ? previous.x + previous.sx / 2 : null;
+                    // Chords have several noteheads at one musical onset. Keep a
+                    // single guide anchor so they do not offset every later note.
+                    if (previous && Math.abs(center - previousCenter) <= 8) {
+                        previous.x = Math.min(previous.x, anchor.x);
+                        previous.sx = Math.max(previous.sx, anchor.sx);
+                    } else {
+                        onsets.push({ ...anchor });
+                    }
+                }
+                anchors.push(...onsets);
+            });
     });
 
     return anchors;
@@ -570,12 +607,21 @@ async function compareNotes() {
 
     document.getElementById("output").innerText = "";
     const feedback = [];
+    const scoreFeedback = [];
     const analysisBpm = recordingBpm ?? getCurrentBpm();
     const expectedNotes = buildExpectedNoteEvents(analysisBpm);
     const pitchTrack = buildPitchTrack(recordingBuffer);
 
+    const missingFeedback = (note) => ({
+        type: "missing",
+        message: `Measure ${note.position.measureNumber}, Beat ${note.position.beat.toFixed(1)}: No reliable pitch detected (Expected: ${note.noteName})`,
+        noteIndex: note.noteIndex,
+        scoreTime: note.scoreTime
+    });
+
     if (!pitchTrack.length) {
         document.getElementById("output").innerText = "No reliable sung pitch was found. Use headphones and record a clear, single voice.\n";
+        renderScoreFeedback(expectedNotes.map(missingFeedback));
         return;
     }
 
@@ -601,6 +647,7 @@ async function compareNotes() {
 
         if (plausibleFrames.length < 2) {
             unmatchedCount++;
+            scoreFeedback.push(missingFeedback(note));
             continue;
         }
 
@@ -615,10 +662,12 @@ async function compareNotes() {
         const direction = centsOff > 0 ? "sharp" : "flat";
         const message = `Measure ${note.position.measureNumber}, Beat ${note.position.beat.toFixed(1)}: ${Math.abs(centsOff).toFixed(0)} cents too ${direction} (Expected: ${note.noteName})`;
         document.getElementById("output").innerText += `${message}\n`;
-        feedback.push({ type: direction, message, noteIndex: note.noteIndex, scoreTime: note.scoreTime });
+        const pitchFeedback = { type: direction, message, noteIndex: note.noteIndex, scoreTime: note.scoreTime };
+        feedback.push(pitchFeedback);
+        scoreFeedback.push(pitchFeedback);
     }
 
-    renderScoreFeedback(feedback);
+    renderScoreFeedback(scoreFeedback);
     const reviewedCount = inTuneCount + feedback.length;
     document.getElementById("output").innerText += `\nContinuous pitch review complete: ${inTuneCount} in tune, ${feedback.length} confirmed pitch issues, ${unmatchedCount} unconfirmed notes.${recordingEnded ? "" : ` ${reviewedCount} notes were assessed.`}`;
 }
@@ -1128,7 +1177,9 @@ async function parseMidiFile() {
     );
   }
   
-  const notes = melodyTrack.notes.filter(n => n.midi >= 48 && n.midi <= 84);
+  // Keep the full vocal range. Filtering out notes below C3 or above C6 created
+  // artificial rests in playback and shifted the visual guide after that point.
+  const notes = melodyTrack.notes.filter((note) => Number.isFinite(note.midi));
   const bpm = Math.round(midi.header.tempos.length > 0 ? midi.header.tempos[0].bpm : 120);
   const ppq = midi.header.ppq || 480;
 
@@ -1172,7 +1223,87 @@ async function parseMidiFile() {
     });
   }
   console.log({ bpm, timeSignatures, notes: parsed });
-  return { bpm, notes: parsed, timeSignatures };
+  return { bpm, notes: parsed, timeSignatures, trackName: melodyTrack.name ?? "" };
+}
+
+function isTenorPart(notes, trackName = "") {
+  if (/\btenor\b/i.test(trackName)) return true;
+  if (!notes.length) return false;
+
+  const pitches = notes.map((note) => note.midi);
+  const average = pitches.reduce((sum, pitch) => sum + pitch, 0) / pitches.length;
+  // A useful fallback for MIDI exports that do not name their SATB tracks.
+  return Math.min(...pitches) >= 43 && Math.max(...pitches) <= 69 && average >= 50 && average <= 61;
+}
+
+function musicXmlPitch(midi) {
+  const names = [["C", 0], ["C", 1], ["D", 0], ["E", -1], ["E", 0], ["F", 0], ["F", 1], ["G", 0], ["A", -1], ["A", 0], ["B", -1], ["B", 0]];
+  const [step, alter] = names[((midi % 12) + 12) % 12];
+  return { step, alter, octave: Math.floor(midi / 12) - 1 };
+}
+
+function musicXmlDuration(durationBeats) {
+  const options = [[4, "whole", false], [3, "half", true], [2, "half", false], [1.5, "quarter", true], [1, "quarter", false], [0.75, "eighth", true], [0.5, "eighth", false], [0.375, "16th", true], [0.25, "16th", false]];
+  const [beats, type, dotted] = options.reduce((closest, option) => Math.abs(option[0] - durationBeats) < Math.abs(closest[0] - durationBeats) ? option : closest);
+  return { duration: beats * 480, type, dot: dotted ? "<dot/>" : "" };
+}
+
+function createTenorMusicXml(notes, bpm, timeSignatures) {
+  // MIDI tick rounding can leave microscopic gaps (for example 0.002 beats).
+  // The source score treats those as continuous notes, not visual sixteenth rests.
+  const snapToSixteenth = (beat) => Math.round(beat * 4) / 4;
+  const sortedNotes = notes
+    .map((note) => {
+      const startBeat = snapToSixteenth(note.startBeat);
+      const endBeat = Math.max(startBeat + 0.25, snapToSixteenth(note.startBeat + note.durationBeats));
+      return { ...note, startBeat, durationBeats: endBeat - startBeat };
+    })
+    .sort((a, b) => a.startBeat - b.startBeat);
+  const finalBeat = Math.max(...sortedNotes.map((note) => note.startBeat + note.durationBeats));
+  const measures = [];
+  let startBeat = 0;
+  let measureNumber = 1;
+
+  const noteXml = (midi, durationBeats, isRest = false) => {
+    const duration = musicXmlDuration(durationBeats);
+    if (isRest) return `<note><rest/><duration>${duration.duration}</duration><type>${duration.type}</type>${duration.dot}</note>`;
+    // The uploaded tenor MIDI already uses written pitches. The octave-down clef
+    // supplies the sounding-octave indication, so do not transpose the notes again.
+    const pitch = musicXmlPitch(midi);
+    return `<note><pitch><step>${pitch.step}</step>${pitch.alter ? `<alter>${pitch.alter}</alter>` : ""}<octave>${pitch.octave}</octave></pitch><duration>${duration.duration}</duration><type>${duration.type}</type>${duration.dot}</note>`;
+  };
+
+  while (startBeat < finalBeat - 0.001) {
+    const signature = getTimeSignatureAtBeat(startBeat, timeSignatures);
+    const endBeat = startBeat + getMeasureQuarterBeats(signature);
+    let cursor = startBeat;
+    let body = "";
+
+    for (const note of sortedNotes) {
+      const noteEnd = note.startBeat + note.durationBeats;
+      if (noteEnd <= cursor + 0.02) continue;
+      if (note.startBeat >= endBeat - 0.02) break;
+      if (note.startBeat > cursor + 0.02) {
+        const restEnd = Math.min(note.startBeat, endBeat);
+        body += noteXml(null, restEnd - cursor, true);
+        cursor = restEnd;
+      }
+      if (cursor >= endBeat - 0.02) break;
+      const segmentEnd = Math.min(noteEnd, endBeat);
+      body += noteXml(note.midi, segmentEnd - cursor);
+      cursor = segmentEnd;
+    }
+    if (cursor < endBeat - 0.02) body += noteXml(null, endBeat - cursor, true);
+
+    const attributes = measureNumber === 1
+      ? `<attributes><divisions>480</divisions><time><beats>${signature.numerator}</beats><beat-type>${signature.denominator}</beat-type></time><clef><sign>G</sign><line>2</line><clef-octave-change>-1</clef-octave-change></clef></attributes>`
+      : "";
+    measures.push(`<measure number="${measureNumber}">${attributes}${body}</measure>`);
+    startBeat = endBeat;
+    measureNumber += 1;
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8"?><score-partwise version="3.1"><part-list><score-part id="P1"><part-name>Tenor</part-name></score-part></part-list><part id="P1"><sound tempo="${bpm}"/>${measures.join("")}</part></score-partwise>`;
 }
 
 function getDuration(duration, bpm) {
@@ -1214,7 +1345,7 @@ async function processAndRender() {
   ]);
   if (!parsedMidi) return;
 
-  const { bpm, notes, timeSignatures } = parsedMidi;
+  const { bpm, notes, timeSignatures, trackName } = parsedMidi;
   midiBpm = bpm;
   midiNotesData = notes;
   midiTimeSignatures = timeSignatures;
@@ -1230,7 +1361,10 @@ async function processAndRender() {
     loopStatus.classList.remove("is-active");
   }
   playPracticeTrackBtn.disabled = notes.length === 0;
-  await renderMuseScore(midiData);
+  const tenorDisplay = isTenorPart(notes, `${trackName} ${file.name}`)
+    ? createTenorMusicXml(notes, bpm, timeSignatures)
+    : null;
+  await renderMuseScore(midiData, tenorDisplay);
 }
 
 function drawStaff(events, timeSignatures = midiTimeSignatures) {
@@ -1374,23 +1508,16 @@ function getGuidePosition(beat) {
   }
 
   const current = scoreNoteAnchors[noteIndex];
-  const next = scoreNoteAnchors[noteIndex + 1];
   if (!current) return null;
 
-  const timing = getNoteBeatTiming(midiNotesData[noteIndex], scoreGuideBpm);
-  const nextTiming = midiNotesData[noteIndex + 1]
-    ? getNoteBeatTiming(midiNotesData[noteIndex + 1], scoreGuideBpm)
-    : null;
-  const progress = next && nextTiming && next.page === current.page && nextTiming.startBeat > timing.startBeat
-    ? Math.max(0, Math.min(1, (beat - timing.startBeat) / (nextTiming.startBeat - timing.startBeat)))
-    : 0;
-
-  // Anchor the guide to the notehead's left edge at the exact moment the note starts.
-  return { page: current.page, x: current.x + ((next?.x ?? current.x) - current.x) * progress };
+  // Move only when the active note changes; the cursor stays at the notehead's
+  // left edge for the whole note instead of drifting across unevenly spaced music.
+  return { page: current.page, x: current.x };
 }
 
 function startScoreGuide(startTime, bpm, range = null, loop = true) {
   clearScoreGuide();
+  scoreNoteAnchors = getScoreNoteAnchors();
   scoreGuideStartTime = startTime;
   scoreGuideBpm = bpm;
   scoreGuideRange = range ? { ...range } : null;
@@ -1651,6 +1778,8 @@ function startRecording() {
         alert("Please upload a MIDI file before recording.");
         return;
     }
+
+    if (recordingHint) recordingHint.hidden = false;
 
     navigator.mediaDevices.getUserMedia({
         audio: {
