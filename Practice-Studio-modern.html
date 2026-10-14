@@ -31,7 +31,8 @@
         <p class="panel-label">Score</p>
         <h2>Upload MIDI</h2>
         <input type="file" id="midiFile" accept=".mid, .midi, audio/midi" />
-        <label class="key-select" for="displayKey">Sheet-music key
+        <div class="key-select">
+          <label for="displayKey">Sheet-music key</label>
           <select id="displayKey">
             <option value="auto">Auto (from MIDI)</option>
             <option value="0">C major / A minor</option>
@@ -50,7 +51,7 @@
             <option value="-6">G♭ major / E♭ minor</option>
             <option value="-7">C♭ major / A♭ minor</option>
           </select>
-        </label>
+        </div>
         <p class="hint">Choose a .mid or .midi file to generate your score.</p>
       </div>
 
