@@ -154,7 +154,13 @@ button:focus-visible, #bpm:focus-visible, #countInBeats:focus-visible, #midiFile
 }
 
 .key-select select {
+  -webkit-appearance: none;
+  appearance: none;
   background-color: #fff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.25 6 6.25l5-5' fill='none' stroke='%23243b64' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.8'/%3E%3C/svg%3E");
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+  background-size: 12px 8px;
   border: 1px solid #b8c3d3;
   border-radius: 2px;
   box-sizing: border-box;
@@ -167,12 +173,19 @@ button:focus-visible, #bpm:focus-visible, #countInBeats:focus-visible, #midiFile
   height: 40px;
   margin-top: 6px;
   max-width: 100%;
-  padding: 0 10px;
+  padding: 0 38px 0 10px;
   width: 100%;
 }
 
 .key-select select:hover { border-color: var(--navy); }
 .key-select select:focus-visible { outline: 3px solid #aebde0; outline-offset: 2px; }
+.key-select select:disabled { background-color: #f4f6f9; color: var(--muted); cursor: wait; }
+
+.key-selection-status {
+  color: var(--muted);
+  font-size: .75rem;
+  margin: 7px 0 0;
+}
 audio { display: block; margin-top: 16px; max-width: 100%; width: 100%; }
 
 .practice-range { align-items: end; background: var(--surface); border: 1px solid var(--line); display: grid; gap: 28px; grid-template-columns: minmax(0, 1fr) minmax(320px, .8fr); margin-top: 24px; padding: clamp(20px, 3vw, 32px); }.practice-range h2 { font-size: 1.45rem; margin-bottom: 8px; }.practice-range > div > p:last-child { color: var(--muted); margin-bottom: 0; max-width: 590px; }.loop-controls { align-items: end; display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }.loop-controls label { font-size: .72rem; font-weight: 800; letter-spacing: .02em; }.loop-controls input { border: 1px solid #b8c3d3; border-radius: 2px; color: var(--ink); display: block; font: inherit; font-size: 1rem; font-weight: 800; height: 42px; margin-top: 5px; padding: 0 8px; width: 100%; }.loop-controls .button-row { grid-column: 1 / -1; }.secondary-button { background: #fff; border-color: #b8c3d3; color: var(--navy); }.secondary-button:hover:not(:disabled) { background: var(--soft-navy); border-color: var(--navy); }.loop-status { color: var(--muted); font-size: .82rem; grid-column: 1 / -1; margin: 0; }.loop-status.is-active { color: var(--navy); font-weight: 700; }

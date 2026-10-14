@@ -12,6 +12,7 @@ const stopPracticeTrackBtn = document.getElementById("stopPracticeTrack");
 const analyzeOutput = document.getElementById("analyze");
 const bpmInput = document.getElementById("bpm");
 const displayKeySelect = document.getElementById("displayKey");
+const keySelectionStatus = document.getElementById("keySelectionStatus");
 const metronomeVolumeInput = document.getElementById("metronomeVolume");
 const metronomeVolumeValue = document.getElementById("metronomeVolumeValue");
 const countInBeatsInput = document.getElementById("countInBeats");
@@ -47,7 +48,7 @@ clearLoopBtn?.addEventListener("click", clearPracticeLoop);
 WTrackBtn?.addEventListener("click", () => setRecordingMode(true));
 WOTrackBtn?.addEventListener("click", () => setRecordingMode(false));
 metronomeVolumeInput?.addEventListener("input", updateMetronomeVolumeLabel);
-displayKeySelect?.addEventListener("change", () => renderCurrentScore());
+displayKeySelect?.addEventListener("change", updateDisplayKey);
 let midiBpm = null;
 let recordingBpm = null;
 let activeLoopRange = null;
@@ -139,9 +140,11 @@ async function renderMuseScore(midiData, displayMusicXml = null) {
       container.appendChild(page);
     });
     scoreNoteAnchors = getScoreNoteAnchors();
+    return true;
   } catch (error) {
     console.error("MuseScore conversion failed:", error);
     container.innerHTML = "<p class=\"sheet-music-error\">Could not convert this MIDI file into sheet music.</p>";
+    return false;
   }
 }
 
@@ -1374,7 +1377,13 @@ async function processAndRender() {
   playPracticeTrackBtn.disabled = notes.length === 0;
   currentMidiData = midiData;
   currentParsedMidi = { bpm, notes, timeSignatures, trackName, fileName: file.name };
-  await renderCurrentScore();
+  const rendered = await renderCurrentScore();
+  if (keySelectionStatus && displayKeySelect?.value !== "auto") {
+    const selectedKey = displayKeySelect.selectedOptions[0]?.textContent?.trim() ?? "selected key";
+    keySelectionStatus.textContent = rendered
+      ? `Showing the score with ${selectedKey}.`
+      : "The selected key could not be applied. Please try another MIDI file.";
+  }
 }
 
 async function renderCurrentScore() {
@@ -1390,7 +1399,25 @@ async function renderCurrentScore() {
     })
     : null;
 
-  await renderMuseScore(currentMidiData, displayMusicXml);
+  return renderMuseScore(currentMidiData, displayMusicXml);
+}
+
+async function updateDisplayKey() {
+  const selectedKey = displayKeySelect?.selectedOptions[0]?.textContent?.trim() ?? "selected key";
+  if (!currentMidiData || !currentParsedMidi) {
+    if (keySelectionStatus) keySelectionStatus.textContent = `${selectedKey} will be applied when you upload a MIDI file.`;
+    return;
+  }
+
+  displayKeySelect.disabled = true;
+  if (keySelectionStatus) keySelectionStatus.textContent = `Applying ${selectedKey}…`;
+  const rendered = await renderCurrentScore();
+  displayKeySelect.disabled = false;
+  if (keySelectionStatus) {
+    keySelectionStatus.textContent = rendered
+      ? `Showing the score with ${selectedKey}.`
+      : "The selected key could not be applied. Please try another MIDI file.";
+  }
 }
 
 function drawStaff(events, timeSignatures = midiTimeSignatures) {
