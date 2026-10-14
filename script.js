@@ -11,6 +11,7 @@ const playPracticeTrackBtn = document.getElementById("playPracticeTrack");
 const stopPracticeTrackBtn = document.getElementById("stopPracticeTrack");
 const analyzeOutput = document.getElementById("analyze");
 const bpmInput = document.getElementById("bpm");
+const displayKeySelect = document.getElementById("displayKey");
 const metronomeVolumeInput = document.getElementById("metronomeVolume");
 const metronomeVolumeValue = document.getElementById("metronomeVolumeValue");
 const countInBeatsInput = document.getElementById("countInBeats");
@@ -46,6 +47,7 @@ clearLoopBtn?.addEventListener("click", clearPracticeLoop);
 WTrackBtn?.addEventListener("click", () => setRecordingMode(true));
 WOTrackBtn?.addEventListener("click", () => setRecordingMode(false));
 metronomeVolumeInput?.addEventListener("input", updateMetronomeVolumeLabel);
+displayKeySelect?.addEventListener("change", () => renderCurrentScore());
 let midiBpm = null;
 let recordingBpm = null;
 let activeLoopRange = null;
@@ -65,6 +67,8 @@ let scoreGuideStartTime = 0;
 let scoreGuideBpm = 120;
 let scoreGuideRange = null;
 let scoreGuideLoop = false;
+let currentMidiData = null;
+let currentParsedMidi = null;
 
 // CC0 recording: go1dfish, “Metronome De Maezel” (ccMixter), trimmed to one tick at runtime.
 fetch("assets/mechanical-metronome.mp3")
@@ -1248,7 +1252,7 @@ function musicXmlDuration(durationBeats) {
   return { duration: beats * 480, type, dot: dotted ? "<dot/>" : "" };
 }
 
-function createTenorMusicXml(notes, bpm, timeSignatures) {
+function createDisplayMusicXml(notes, bpm, timeSignatures, { keyFifths = null, tenor = false } = {}) {
   // MIDI tick rounding can leave microscopic gaps (for example 0.002 beats).
   // The source score treats those as continuous notes, not visual sixteenth rests.
   const snapToSixteenth = (beat) => Math.round(beat * 4) / 4;
@@ -1295,15 +1299,22 @@ function createTenorMusicXml(notes, bpm, timeSignatures) {
     }
     if (cursor < endBeat - 0.02) body += noteXml(null, endBeat - cursor, true);
 
+    const clef = tenor
+      ? `<clef><sign>G</sign><line>2</line><clef-octave-change>-1</clef-octave-change></clef>`
+      : chooseClef(notes) === "bass"
+        ? `<clef><sign>F</sign><line>4</line></clef>`
+        : `<clef><sign>G</sign><line>2</line></clef>`;
+    const key = keyFifths === null ? "" : `<key><fifths>${keyFifths}</fifths></key>`;
     const attributes = measureNumber === 1
-      ? `<attributes><divisions>480</divisions><time><beats>${signature.numerator}</beats><beat-type>${signature.denominator}</beat-type></time><clef><sign>G</sign><line>2</line><clef-octave-change>-1</clef-octave-change></clef></attributes>`
+      ? `<attributes><divisions>480</divisions>${key}<time><beats>${signature.numerator}</beats><beat-type>${signature.denominator}</beat-type></time>${clef}</attributes>`
       : "";
     measures.push(`<measure number="${measureNumber}">${attributes}${body}</measure>`);
     startBeat = endBeat;
     measureNumber += 1;
   }
 
-  return `<?xml version="1.0" encoding="UTF-8"?><score-partwise version="3.1"><part-list><score-part id="P1"><part-name>Tenor</part-name></score-part></part-list><part id="P1"><sound tempo="${bpm}"/>${measures.join("")}</part></score-partwise>`;
+  const partName = tenor ? "Tenor" : "Practice part";
+  return `<?xml version="1.0" encoding="UTF-8"?><score-partwise version="3.1"><part-list><score-part id="P1"><part-name>${partName}</part-name></score-part></part-list><part id="P1"><sound tempo="${bpm}"/>${measures.join("")}</part></score-partwise>`;
 }
 
 function getDuration(duration, bpm) {
@@ -1361,10 +1372,25 @@ async function processAndRender() {
     loopStatus.classList.remove("is-active");
   }
   playPracticeTrackBtn.disabled = notes.length === 0;
-  const tenorDisplay = isTenorPart(notes, `${trackName} ${file.name}`)
-    ? createTenorMusicXml(notes, bpm, timeSignatures)
+  currentMidiData = midiData;
+  currentParsedMidi = { bpm, notes, timeSignatures, trackName, fileName: file.name };
+  await renderCurrentScore();
+}
+
+async function renderCurrentScore() {
+  if (!currentMidiData || !currentParsedMidi) return;
+
+  const { bpm, notes, timeSignatures, trackName, fileName } = currentParsedMidi;
+  const selectedKey = displayKeySelect?.value ?? "auto";
+  const tenor = isTenorPart(notes, `${trackName} ${fileName}`);
+  const displayMusicXml = tenor || selectedKey !== "auto"
+    ? createDisplayMusicXml(notes, bpm, timeSignatures, {
+      keyFifths: selectedKey === "auto" ? null : Number(selectedKey),
+      tenor
+    })
     : null;
-  await renderMuseScore(midiData, tenorDisplay);
+
+  await renderMuseScore(currentMidiData, displayMusicXml);
 }
 
 function drawStaff(events, timeSignatures = midiTimeSignatures) {

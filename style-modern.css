@@ -142,6 +142,8 @@ button:focus-visible, #bpm:focus-visible, #countInBeats:focus-visible, #midiFile
 }
 
 #midiFile::file-selector-button { margin-right: 10px; min-height: 34px; padding: 6px 9px; }
+.key-select { font-size: .75rem; font-weight: 800; letter-spacing: .02em; margin-top: 14px; }
+.key-select select { background: #fff; border: 1px solid #b8c3d3; border-radius: 2px; color: var(--ink); display: block; font: inherit; font-size: .86rem; font-weight: 600; margin-top: 5px; max-width: 100%; min-height: 38px; padding: 0 8px; width: 100%; }
 audio { display: block; margin-top: 16px; max-width: 100%; width: 100%; }
 
 .practice-range { align-items: end; background: var(--surface); border: 1px solid var(--line); display: grid; gap: 28px; grid-template-columns: minmax(0, 1fr) minmax(320px, .8fr); margin-top: 24px; padding: clamp(20px, 3vw, 32px); }.practice-range h2 { font-size: 1.45rem; margin-bottom: 8px; }.practice-range > div > p:last-child { color: var(--muted); margin-bottom: 0; max-width: 590px; }.loop-controls { align-items: end; display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }.loop-controls label { font-size: .72rem; font-weight: 800; letter-spacing: .02em; }.loop-controls input { border: 1px solid #b8c3d3; border-radius: 2px; color: var(--ink); display: block; font: inherit; font-size: 1rem; font-weight: 800; height: 42px; margin-top: 5px; padding: 0 8px; width: 100%; }.loop-controls .button-row { grid-column: 1 / -1; }.secondary-button { background: #fff; border-color: #b8c3d3; color: var(--navy); }.secondary-button:hover:not(:disabled) { background: var(--soft-navy); border-color: var(--navy); }.loop-status { color: var(--muted); font-size: .82rem; grid-column: 1 / -1; margin: 0; }.loop-status.is-active { color: var(--navy); font-weight: 700; }
