@@ -1044,6 +1044,61 @@ function parseTimeSignatures(arrayBuffer) {
   return uniqueSignatures.length > 0 ? uniqueSignatures : [{ startBeat: 0, numerator: 4, denominator: 4 }];
 }
 
+function parseInitialKeyFifths(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  if (bytes.length < 14) return 0;
+
+  let index = 14;
+  while (index + 8 <= bytes.length) {
+    const chunkType = String.fromCharCode(bytes[index], bytes[index + 1], bytes[index + 2], bytes[index + 3]);
+    const chunkLength =
+      (bytes[index + 4] << 24) |
+      (bytes[index + 5] << 16) |
+      (bytes[index + 6] << 8) |
+      bytes[index + 7];
+    index += 8;
+    if (chunkType !== "MTrk") {
+      index += chunkLength;
+      continue;
+    }
+
+    const trackEnd = index + chunkLength;
+    const state = { index };
+    let runningStatus = null;
+    while (state.index < trackEnd) {
+      readVariableLengthValue(bytes, state);
+      let status = bytes[state.index++];
+      if (status < 0x80) {
+        state.index--;
+        status = runningStatus;
+      } else {
+        runningStatus = status;
+      }
+
+      if (status === 0xff) {
+        const metaType = bytes[state.index++];
+        const metaLength = readVariableLengthValue(bytes, state);
+        if (metaType === 0x59 && metaLength >= 2) {
+          // MIDI stores the number of sharps (positive) or flats (negative) as a signed byte.
+          return new Int8Array(bytes.buffer, bytes.byteOffset + state.index, 1)[0];
+        }
+        state.index += metaLength;
+        continue;
+      }
+
+      if (status === 0xf0 || status === 0xf7) {
+        state.index += readVariableLengthValue(bytes, state);
+      } else {
+        const command = status & 0xf0;
+        state.index += command === 0xc0 || command === 0xd0 ? 1 : 2;
+      }
+    }
+    index = trackEnd;
+  }
+
+  return 0;
+}
+
 function buildMeasures(events, timeSignatures) {
   const measures = [];
   let currentMeasure = [];
@@ -1176,6 +1231,7 @@ async function parseMidiFile() {
   const arrayBuffer = await file.arrayBuffer();
   const midi = new Midi(arrayBuffer);
   const timeSignatures = parseTimeSignatures(arrayBuffer);
+  const keyFifths = parseInitialKeyFifths(arrayBuffer);
 
   let melodyTrack = midi.tracks[0];
   if (midi.tracks.length > 1) {
@@ -1230,7 +1286,7 @@ async function parseMidiFile() {
     });
   }
   console.log({ bpm, timeSignatures, notes: parsed });
-  return { bpm, notes: parsed, timeSignatures, trackName: melodyTrack.name ?? "" };
+  return { bpm, notes: parsed, timeSignatures, keyFifths, trackName: melodyTrack.name ?? "" };
 }
 
 function isTenorPart(notes, trackName = "") {
@@ -1243,10 +1299,31 @@ function isTenorPart(notes, trackName = "") {
   return Math.min(...pitches) >= 43 && Math.max(...pitches) <= 69 && average >= 50 && average <= 61;
 }
 
-function musicXmlPitch(midi) {
-  const names = [["C", 0], ["C", 1], ["D", 0], ["E", -1], ["E", 0], ["F", 0], ["F", 1], ["G", 0], ["A", -1], ["A", 0], ["B", -1], ["B", 0]];
-  const [step, alter] = names[((midi % 12) + 12) % 12];
-  return { step, alter, octave: Math.floor(midi / 12) - 1 };
+function musicXmlPitch(midi, keyFifths = 0) {
+  const pitchClass = ((midi % 12) + 12) % 12;
+  const letterPitchClasses = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+  const keyAlterations = Object.fromEntries(Object.keys(letterPitchClasses).map((step) => [step, 0]));
+  const sharpOrder = ["F", "C", "G", "D", "A", "E", "B"];
+  const flatOrder = ["B", "E", "A", "D", "G", "C", "F"];
+
+  (keyFifths >= 0 ? sharpOrder : flatOrder)
+    .slice(0, Math.abs(keyFifths))
+    .forEach((step) => { keyAlterations[step] = keyFifths >= 0 ? 1 : -1; });
+
+  const candidates = Object.entries(letterPitchClasses)
+    .flatMap(([step, naturalPitchClass]) => [-2, -1, 0, 1, 2]
+      .filter((alter) => (naturalPitchClass + alter + 24) % 12 === pitchClass)
+      .map((alter) => ({ step, alter })));
+  const preferredDirection = Math.sign(keyFifths);
+  const [best] = candidates.sort((a, b) => {
+    const score = (candidate) => {
+      const needsAccidental = candidate.alter === keyAlterations[candidate.step] ? 0 : 1;
+      const directionMismatch = preferredDirection && candidate.alter && Math.sign(candidate.alter) !== preferredDirection ? 1 : 0;
+      return needsAccidental * 10 + directionMismatch * 2 + Math.abs(candidate.alter - keyAlterations[candidate.step]);
+    };
+    return score(a) - score(b);
+  });
+  return { ...best, octave: Math.floor(midi / 12) - 1 };
 }
 
 function musicXmlDuration(durationBeats) {
@@ -1276,7 +1353,7 @@ function createDisplayMusicXml(notes, bpm, timeSignatures, { keyFifths = null, t
     if (isRest) return `<note><rest/><duration>${duration.duration}</duration><type>${duration.type}</type>${duration.dot}</note>`;
     // The uploaded tenor MIDI already uses written pitches. The octave-down clef
     // supplies the sounding-octave indication, so do not transpose the notes again.
-    const pitch = musicXmlPitch(midi);
+    const pitch = musicXmlPitch(midi, keyFifths);
     return `<note><pitch><step>${pitch.step}</step>${pitch.alter ? `<alter>${pitch.alter}</alter>` : ""}<octave>${pitch.octave}</octave></pitch><duration>${duration.duration}</duration><type>${duration.type}</type>${duration.dot}</note>`;
   };
 
@@ -1307,11 +1384,14 @@ function createDisplayMusicXml(notes, bpm, timeSignatures, { keyFifths = null, t
       : chooseClef(notes) === "bass"
         ? `<clef><sign>F</sign><line>4</line></clef>`
         : `<clef><sign>G</sign><line>2</line></clef>`;
-    const key = keyFifths === null ? "" : `<key><fifths>${keyFifths}</fifths></key>`;
+    const key = `<key><fifths>${keyFifths}</fifths></key>`;
     const attributes = measureNumber === 1
       ? `<attributes><divisions>480</divisions>${key}<time><beats>${signature.numerator}</beats><beat-type>${signature.denominator}</beat-type></time>${clef}</attributes>`
       : "";
-    measures.push(`<measure number="${measureNumber}">${attributes}${body}</measure>`);
+    const finalBarline = endBeat >= finalBeat - 0.001
+      ? "<barline location=\"right\"><bar-style>light-heavy</bar-style></barline>"
+      : "";
+    measures.push(`<measure number="${measureNumber}">${attributes}${body}${finalBarline}</measure>`);
     startBeat = endBeat;
     measureNumber += 1;
   }
@@ -1359,7 +1439,7 @@ async function processAndRender() {
   ]);
   if (!parsedMidi) return;
 
-  const { bpm, notes, timeSignatures, trackName } = parsedMidi;
+  const { bpm, notes, timeSignatures, keyFifths, trackName } = parsedMidi;
   midiBpm = bpm;
   midiNotesData = notes;
   midiTimeSignatures = timeSignatures;
@@ -1376,7 +1456,7 @@ async function processAndRender() {
   }
   playPracticeTrackBtn.disabled = notes.length === 0;
   currentMidiData = midiData;
-  currentParsedMidi = { bpm, notes, timeSignatures, trackName, fileName: file.name };
+  currentParsedMidi = { bpm, notes, timeSignatures, keyFifths, trackName, fileName: file.name };
   const rendered = await renderCurrentScore();
   if (keySelectionStatus && displayKeySelect?.value !== "auto") {
     const selectedKey = displayKeySelect.selectedOptions[0]?.textContent?.trim() ?? "selected key";
@@ -1389,15 +1469,13 @@ async function processAndRender() {
 async function renderCurrentScore() {
   if (!currentMidiData || !currentParsedMidi) return;
 
-  const { bpm, notes, timeSignatures, trackName, fileName } = currentParsedMidi;
+  const { bpm, notes, timeSignatures, keyFifths, trackName, fileName } = currentParsedMidi;
   const selectedKey = displayKeySelect?.value ?? "auto";
   const tenor = isTenorPart(notes, `${trackName} ${fileName}`);
-  const displayMusicXml = tenor || selectedKey !== "auto"
-    ? createDisplayMusicXml(notes, bpm, timeSignatures, {
-      keyFifths: selectedKey === "auto" ? null : Number(selectedKey),
-      tenor
-    })
-    : null;
+  const displayMusicXml = createDisplayMusicXml(notes, bpm, timeSignatures, {
+    keyFifths: selectedKey === "auto" ? keyFifths : Number(selectedKey),
+    tenor
+  });
 
   return renderMuseScore(currentMidiData, displayMusicXml);
 }
