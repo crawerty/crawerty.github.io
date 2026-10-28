@@ -35,8 +35,9 @@ function renderFiles(files) {
     const title = escapeHtml(file.title || "Untitled MIDI");
     const part = escapeHtml(file.part || "Practice part");
     const composer = escapeHtml(file.composer || "Community submission");
-    // The current Supabase column is named "storage path" (with a space).
-    const path = encodeURIComponent(file["storage path"] || "");
+    // Keep the stored path unencoded here. The signing endpoint needs literal
+    // path separators; encoding them as %2F creates an invalid signature.
+    const path = file["storage path"] || "";
     const disabled = path ? "" : "disabled";
 
     return `<article class="midi-card">
@@ -46,7 +47,7 @@ function renderFiles(files) {
         <h3>${title}</h3>
         <p>${composer}</p>
       </div>
-      <button class="button-link download-midi" type="button" data-path="${path}" ${disabled}>Download MIDI</button>
+      <button class="button-link download-midi" type="button" data-path="${escapeHtml(path)}" ${disabled}>Download MIDI</button>
     </article>`;
   }).join("");
 }
@@ -93,7 +94,7 @@ library?.addEventListener("click", async (event) => {
   button.textContent = "Preparing…";
   try {
     const response = await fetch(
-      `${SUPABASE_URL}/storage/v1/object/sign/${LIBRARY_BUCKET}/${button.dataset.path}`,
+      `${SUPABASE_URL}/storage/v1/object/sign/${LIBRARY_BUCKET}/${encodeStoragePath(button.dataset.path)}`,
       { method: "POST", headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${SUPABASE_PUBLISHABLE_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({ expiresIn: 60 }) }
     );
     if (!response.ok) throw new Error("Could not create download link");
