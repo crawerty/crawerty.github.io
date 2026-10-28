@@ -52,6 +52,17 @@
             <option value="-7">C♭ major / A♭ minor</option>
           </select>
         </div>
+        <div class="key-select clef-select">
+          <label for="displayClef">Sheet-music clef</label>
+          <select id="displayClef">
+            <option value="auto">Auto (from part)</option>
+            <option value="treble">Treble clef</option>
+            <option value="tenor-8vb">Tenor treble clef (8vb)</option>
+            <option value="bass">Bass clef</option>
+            <option value="alto">Alto clef</option>
+            <option value="tenor-c">Tenor C clef</option>
+          </select>
+        </div>
         <p id="keySelectionStatus" class="key-selection-status" aria-live="polite">Uses the key stored in the MIDI file.</p>
         <p id="uploadRequired" class="hint upload-required" role="status">Upload a MIDI file to enable the metronome, practice track, and recording tools.</p>
       </div>
@@ -141,6 +152,6 @@
     </section>
   </main>
 
-  <script type="module" src="script.js?v=20261027-controls"></script>
+  <script type="module" src="script.js?v=20261028-clef"></script>
 </body>
 </html>

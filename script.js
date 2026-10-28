@@ -12,6 +12,7 @@ const stopPracticeTrackBtn = document.getElementById("stopPracticeTrack");
 const analyzeOutput = document.getElementById("analyze");
 const bpmInput = document.getElementById("bpm");
 const displayKeySelect = document.getElementById("displayKey");
+const displayClefSelect = document.getElementById("displayClef");
 const keySelectionStatus = document.getElementById("keySelectionStatus");
 const metronomeVolumeInput = document.getElementById("metronomeVolume");
 const metronomeVolumeValue = document.getElementById("metronomeVolumeValue");
@@ -71,6 +72,7 @@ WTrackBtn?.addEventListener("click", () => setRecordingMode(true));
 WOTrackBtn?.addEventListener("click", () => setRecordingMode(false));
 metronomeVolumeInput?.addEventListener("input", updateMetronomeVolumeLabel);
 displayKeySelect?.addEventListener("change", updateDisplayKey);
+displayClefSelect?.addEventListener("change", updateDisplayKey);
 let midiBpm = null;
 let recordingBpm = null;
 let activeLoopRange = null;
@@ -1379,7 +1381,9 @@ function musicXmlPitch(midi, keyFifths = 0) {
     };
     return score(a) - score(b);
   });
-  return { ...best, octave: Math.floor(midi / 12) - 1 };
+  // The letter name determines its octave. For example, MIDI C4 spelled as
+  // B♯ is B♯3, while MIDI B3 spelled as C♭ is C♭4.
+  return { ...best, octave: Math.floor((midi - best.alter) / 12) - 1 };
 }
 
 function musicXmlDuration(durationBeats) {
@@ -1388,7 +1392,7 @@ function musicXmlDuration(durationBeats) {
   return { duration: beats * 480, type, dot: dotted ? "<dot/>" : "" };
 }
 
-function createDisplayMusicXml(notes, bpm, timeSignatures, { keyFifths = null, tenor = false } = {}) {
+function createDisplayMusicXml(notes, bpm, timeSignatures, { keyFifths = 0, clef = "treble" } = {}) {
   // MIDI tick rounding can leave microscopic gaps (for example 0.002 beats).
   // The source score treats those as continuous notes, not visual sixteenth rests.
   const snapToSixteenth = (beat) => Math.round(beat * 4) / 4;
@@ -1441,14 +1445,16 @@ function createDisplayMusicXml(notes, bpm, timeSignatures, { keyFifths = null, t
     }
     if (cursor < endBeat - 0.02) body += noteXml(null, endBeat - cursor, true);
 
-    const clef = tenor
-      ? `<clef><sign>G</sign><line>2</line><clef-octave-change>-1</clef-octave-change></clef>`
-      : chooseClef(notes) === "bass"
-        ? `<clef><sign>F</sign><line>4</line></clef>`
-        : `<clef><sign>G</sign><line>2</line></clef>`;
+    const clefXml = {
+      "tenor-8vb": `<clef><sign>G</sign><line>2</line><clef-octave-change>-1</clef-octave-change></clef>`,
+      bass: `<clef><sign>F</sign><line>4</line></clef>`,
+      alto: `<clef><sign>C</sign><line>3</line></clef>`,
+      "tenor-c": `<clef><sign>C</sign><line>4</line></clef>`,
+      treble: `<clef><sign>G</sign><line>2</line></clef>`
+    }[clef] ?? `<clef><sign>G</sign><line>2</line></clef>`;
     const key = `<key><fifths>${keyFifths}</fifths></key>`;
     const attributes = measureNumber === 1
-      ? `<attributes><divisions>480</divisions>${key}<time><beats>${signature.numerator}</beats><beat-type>${signature.denominator}</beat-type></time>${clef}</attributes>`
+      ? `<attributes><divisions>480</divisions>${key}<time><beats>${signature.numerator}</beats><beat-type>${signature.denominator}</beat-type></time>${clefXml}</attributes>`
       : "";
     const finalBarline = endBeat >= finalBeat - 0.001
       ? "<barline location=\"right\"><bar-style>light-heavy</bar-style></barline>"
@@ -1458,7 +1464,7 @@ function createDisplayMusicXml(notes, bpm, timeSignatures, { keyFifths = null, t
     measureNumber += 1;
   }
 
-  const partName = tenor ? "Tenor" : "Practice part";
+  const partName = clef === "tenor-8vb" ? "Tenor" : "Practice part";
   return `<?xml version="1.0" encoding="UTF-8"?><score-partwise version="3.1"><part-list><score-part id="P1"><part-name>${partName}</part-name></score-part></part-list><part id="P1"><sound tempo="${bpm}"/>${measures.join("")}</part></score-partwise>`;
 }
 
@@ -1520,8 +1526,8 @@ async function processAndRender() {
   currentMidiData = midiData;
   currentParsedMidi = { bpm, notes, timeSignatures, keyFifths, trackName, fileName: file.name };
   const rendered = await renderCurrentScore();
-  if (keySelectionStatus && displayKeySelect?.value !== "auto") {
-    const selectedKey = displayKeySelect.selectedOptions[0]?.textContent?.trim() ?? "selected key";
+  if (keySelectionStatus && (displayKeySelect?.value !== "auto" || displayClefSelect?.value !== "auto")) {
+    const selectedKey = getScoreDisplayLabel();
     keySelectionStatus.textContent = rendered
       ? `Showing the score with ${selectedKey}.`
       : "The selected key could not be applied. Please try another MIDI file.";
@@ -1533,31 +1539,40 @@ async function renderCurrentScore() {
 
   const { bpm, notes, timeSignatures, keyFifths, trackName, fileName } = currentParsedMidi;
   const selectedKey = displayKeySelect?.value ?? "auto";
-  const tenor = isTenorPart(notes, `${trackName} ${fileName}`);
+  const selectedClef = displayClefSelect?.value ?? "auto";
+  const automaticClef = isTenorPart(notes, `${trackName} ${fileName}`) ? "tenor-8vb" : chooseClef(notes);
   const displayMusicXml = createDisplayMusicXml(notes, bpm, timeSignatures, {
     keyFifths: selectedKey === "auto" ? keyFifths : Number(selectedKey),
-    tenor
+    clef: selectedClef === "auto" ? automaticClef : selectedClef
   });
 
   return renderMuseScore(currentMidiData, displayMusicXml);
 }
 
 async function updateDisplayKey() {
-  const selectedKey = displayKeySelect?.selectedOptions[0]?.textContent?.trim() ?? "selected key";
+  const selectedKey = getScoreDisplayLabel();
   if (!currentMidiData || !currentParsedMidi) {
     if (keySelectionStatus) keySelectionStatus.textContent = `${selectedKey} will be applied when you upload a MIDI file.`;
     return;
   }
 
   displayKeySelect.disabled = true;
+  if (displayClefSelect) displayClefSelect.disabled = true;
   if (keySelectionStatus) keySelectionStatus.textContent = `Applying ${selectedKey}…`;
   const rendered = await renderCurrentScore();
   displayKeySelect.disabled = false;
+  if (displayClefSelect) displayClefSelect.disabled = false;
   if (keySelectionStatus) {
     keySelectionStatus.textContent = rendered
       ? `Showing the score with ${selectedKey}.`
       : "The selected key could not be applied. Please try another MIDI file.";
   }
+}
+
+function getScoreDisplayLabel() {
+  const key = displayKeySelect?.selectedOptions[0]?.textContent?.trim() ?? "Auto key";
+  const clef = displayClefSelect?.selectedOptions[0]?.textContent?.trim() ?? "Auto clef";
+  return `${key}; ${clef}`;
 }
 
 function drawStaff(events, timeSignatures = midiTimeSignatures) {
