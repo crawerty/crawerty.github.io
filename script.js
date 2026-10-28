@@ -81,6 +81,7 @@ let midiClef = "treble";
 let currentScoreInstance = null;
 let scoreSegmentPositions = null;
 let scoreNoteAnchors = [];
+let scoreGuideTimeline = [];
 let practiceOscillators = [];
 let practiceTrackStopTimer = null;
 let practiceTrackLoopId = 0;
@@ -162,6 +163,7 @@ async function renderMuseScore(midiData, displayMusicXml = null) {
       container.appendChild(page);
     });
     scoreNoteAnchors = getScoreNoteAnchors();
+    scoreGuideTimeline = getScoreGuideTimeline(scoreNoteAnchors);
     return true;
   } catch (error) {
     console.error("MuseScore conversion failed:", error);
@@ -563,6 +565,38 @@ function getScoreNoteAnchors() {
     });
 
     return anchors;
+}
+
+function getScoreGuideTimeline(anchors) {
+  if (!midiNotesData?.length || !anchors.length) return [];
+
+  // createDisplayMusicXml snaps timing to sixteenths and splits sustained notes
+  // at barlines. Mirror that exact process so a tied continuation receives its
+  // own guide position without shifting every later note by one anchor.
+  const snapToSixteenth = (beat) => Math.round(beat * 4) / 4;
+  const timeline = [];
+  let anchorIndex = 0;
+
+  for (const note of midiNotesData) {
+    const timing = getNoteBeatTiming(note, midiBpm ?? scoreGuideBpm);
+    let segmentStart = snapToSixteenth(timing.startBeat);
+    const noteEnd = Math.max(segmentStart + 0.25, snapToSixteenth(timing.startBeat + timing.durationBeats));
+
+    while (segmentStart < noteEnd - 0.001) {
+      const signature = getTimeSignatureAtBeat(segmentStart, midiTimeSignatures);
+      const measureLength = getMeasureQuarterBeats(signature);
+      const beatIntoSignature = segmentStart - signature.startBeat;
+      const beatIntoMeasure = ((beatIntoSignature % measureLength) + measureLength) % measureLength;
+      const beatsUntilBarline = measureLength - beatIntoMeasure;
+      const segmentEnd = Math.min(noteEnd, segmentStart + (beatsUntilBarline || measureLength));
+      const anchor = anchors[anchorIndex++];
+
+      if (anchor) timeline.push({ startBeat: segmentStart, endBeat: segmentEnd, anchor });
+      segmentStart = segmentEnd;
+    }
+  }
+
+  return timeline;
 }
 
 function clearScoreFeedback() {
@@ -1370,13 +1404,17 @@ function createDisplayMusicXml(notes, bpm, timeSignatures, { keyFifths = null, t
   let startBeat = 0;
   let measureNumber = 1;
 
-  const noteXml = (midi, durationBeats, isRest = false) => {
+  const noteXml = (midi, durationBeats, isRest = false, { tieStart = false, tieStop = false } = {}) => {
     const duration = musicXmlDuration(durationBeats);
     if (isRest) return `<note><rest/><duration>${duration.duration}</duration><type>${duration.type}</type>${duration.dot}</note>`;
     // The uploaded tenor MIDI already uses written pitches. The octave-down clef
     // supplies the sounding-octave indication, so do not transpose the notes again.
     const pitch = musicXmlPitch(midi, keyFifths);
-    return `<note><pitch><step>${pitch.step}</step>${pitch.alter ? `<alter>${pitch.alter}</alter>` : ""}<octave>${pitch.octave}</octave></pitch><duration>${duration.duration}</duration><type>${duration.type}</type>${duration.dot}</note>`;
+    const ties = `${tieStop ? '<tie type="stop"/>' : ""}${tieStart ? '<tie type="start"/>' : ""}`;
+    const tiedNotations = `${tieStop ? '<tied type="stop"/>' : ""}${tieStart ? '<tied type="start"/>' : ""}`;
+    // WebMscore lays out the MusicXML, including key-aware accidentals. Supplying
+    // both tie and tied notation elements makes the continuation visible and valid.
+    return `<note><pitch><step>${pitch.step}</step>${pitch.alter ? `<alter>${pitch.alter}</alter>` : ""}<octave>${pitch.octave}</octave></pitch><duration>${duration.duration}</duration>${ties}<type>${duration.type}</type>${duration.dot}${tiedNotations ? `<notations>${tiedNotations}</notations>` : ""}</note>`;
   };
 
   while (startBeat < finalBeat - 0.001) {
@@ -1396,7 +1434,9 @@ function createDisplayMusicXml(notes, bpm, timeSignatures, { keyFifths = null, t
       }
       if (cursor >= endBeat - 0.02) break;
       const segmentEnd = Math.min(noteEnd, endBeat);
-      body += noteXml(note.midi, segmentEnd - cursor);
+      const tieStop = note.startBeat < cursor - 0.02;
+      const tieStart = noteEnd > endBeat + 0.02;
+      body += noteXml(note.midi, segmentEnd - cursor, false, { tieStart, tieStop });
       cursor = segmentEnd;
     }
     if (cursor < endBeat - 0.02) body += noteXml(null, endBeat - cursor, true);
@@ -1651,26 +1691,24 @@ function clearScoreGuide() {
 }
 
 function getGuidePosition(beat) {
-  if (!midiNotesData?.length || !scoreNoteAnchors.length) return null;
+  if (!scoreGuideTimeline.length) return null;
 
-  let noteIndex = 0;
-  for (let index = 0; index < midiNotesData.length; index += 1) {
-    const timing = getNoteBeatTiming(midiNotesData[index], scoreGuideBpm);
-    if (timing.startBeat <= beat + 0.001) noteIndex = index;
+  let current = null;
+  for (const segment of scoreGuideTimeline) {
+    if (segment.startBeat <= beat + 0.001) current = segment;
     else break;
   }
-
-  const current = scoreNoteAnchors[noteIndex];
-  if (!current) return null;
+  if (!current?.anchor) return null;
 
   // Move only when the active note changes; the cursor stays at the notehead's
   // left edge for the whole note instead of drifting across unevenly spaced music.
-  return { page: current.page, x: current.x };
+  return { page: current.anchor.page, x: current.anchor.x };
 }
 
 function startScoreGuide(startTime, bpm, range = null, loop = true) {
   clearScoreGuide();
   scoreNoteAnchors = getScoreNoteAnchors();
+  scoreGuideTimeline = getScoreGuideTimeline(scoreNoteAnchors);
   scoreGuideStartTime = startTime;
   scoreGuideBpm = bpm;
   scoreGuideRange = range ? { ...range } : null;
