@@ -24,6 +24,7 @@ const loopStatus = document.getElementById("loopStatus");
 const WTrackBtn = document.getElementById("WTrack");
 const WOTrackBtn = document.getElementById("WOTrack");
 const recordingHint = document.getElementById("recordingHint");
+const uploadRequired = document.getElementById("uploadRequired");
 let recorder;
 let audioChunks = [];
 recordBtn.addEventListener("click", startRecording);
@@ -36,8 +37,29 @@ let metronomeRange = null;
 let mechanicalTickBuffer = null;
 const metronomeLookAheadMs = 25;
 const metronomeScheduleAheadSeconds = 0.1;
-recordBtn.disabled = false;
-stopBtn.disabled = true;
+function setMidiControlsReady(ready) {
+  [startMetronome, playPracticeTrackBtn, recordBtn, WTrackBtn, WOTrackBtn, analyzeOutput].forEach((control) => {
+    if (control) control.disabled = !ready;
+  });
+  [bpmInput, countInBeatsInput, metronomeVolumeInput].forEach((control) => {
+    if (control) control.disabled = !ready;
+  });
+
+  if (!ready) {
+    stopBtn.disabled = true;
+    stopMetronome.disabled = true;
+    stopPracticeTrackBtn.disabled = true;
+    if (uploadRequired) {
+      uploadRequired.classList.remove("is-ready");
+      uploadRequired.textContent = "Upload a MIDI file to enable the metronome, practice track, and recording tools.";
+    }
+  } else if (uploadRequired) {
+    uploadRequired.classList.add("is-ready");
+    uploadRequired.textContent = "MIDI loaded — the practice tools are ready.";
+  }
+}
+
+setMidiControlsReady(false);
 startMetronome.addEventListener("click", startMet);
 stopMetronome.addEventListener("click", stopMet);
 stopMetronome.disabled = true;
@@ -1454,7 +1476,7 @@ async function processAndRender() {
     loopStatus.textContent = "No loop is set. The full score will play and be reviewed.";
     loopStatus.classList.remove("is-active");
   }
-  playPracticeTrackBtn.disabled = notes.length === 0;
+  setMidiControlsReady(notes.length > 0);
   currentMidiData = midiData;
   currentParsedMidi = { bpm, notes, timeSignatures, keyFifths, trackName, fileName: file.name };
   const rendered = await renderCurrentScore();
