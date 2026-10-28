@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" type="image/png" href="tabCover2.png" />
-  <link rel="stylesheet" href="style-modern.css" />
+  <link rel="stylesheet" href="style-modern.css?v=20261027-controls" />
   <title>OnSight Music — Practice Studio</title>
 </head>
 <body>
@@ -63,15 +63,15 @@
             <p class="tempo-description">Set your pace and count-in.</p>
           </div>
           <div class="tempo-inputs">
-            <label for="bpm">BPM<input type="number" id="bpm" value="100" min="20" max="300" step="1" /></label>
-            <label for="countInBeats" title="Count-in beats">Count-in<input type="number" id="countInBeats" value="4" min="0" step="1" /></label>
+            <label for="bpm">BPM<input type="number" id="bpm" value="100" min="20" max="300" step="1" disabled /></label>
+            <label for="countInBeats" title="Count-in beats">Count-in<input type="number" id="countInBeats" value="4" min="0" step="1" disabled /></label>
           </div>
         </div>
         <div class="button-row">
-          <button id="startMetronome">Start metronome</button>
+          <button id="startMetronome" disabled>Start metronome</button>
           <button id="stopMetronome" disabled>Stop</button>
         </div>
-        <label class="volume-control" for="metronomeVolume">Metronome volume <output id="metronomeVolumeValue">75%</output><input type="range" id="metronomeVolume" min="0" max="100" value="75" /></label>
+        <label class="volume-control" for="metronomeVolume">Metronome volume <output id="metronomeVolumeValue">75%</output><input type="range" id="metronomeVolume" min="0" max="100" value="75" disabled /></label>
       </div>
 
       <div class="control-panel">
@@ -87,12 +87,12 @@
         <p class="panel-label">Performance</p>
         <h2>Record yourself</h2>
         <div class="button-row">
-          <button id="record">Start recording</button>
+          <button id="record" disabled>Start recording</button>
           <button id="stop" disabled>Stop</button>
         </div>
         <div class="button-row recording-mode-row" aria-label="Recording accompaniment">
-          <button id="WTrack" class="recording-mode is-selected" type="button" aria-pressed="true">With track</button>
-          <button id="WOTrack" class="recording-mode" type="button" aria-pressed="false">Without track</button>
+          <button id="WTrack" class="recording-mode is-selected" type="button" aria-pressed="true" disabled>With track</button>
+          <button id="WOTrack" class="recording-mode" type="button" aria-pressed="false" disabled>Without track</button>
         </div>
         <p id="recordingHint" class="recording-hint" role="status" hidden>For the clearest recording, use headphones so the track and metronome do not bleed into the microphone.</p>
         <audio id="player" controls></audio>
@@ -135,12 +135,12 @@
           <p class="eyebrow">Review</p>
           <h2>Performance analysis</h2>
         </div>
-        <button id="analyze">Analyze recording</button>
+        <button id="analyze" disabled>Analyze recording</button>
       </div>
       <p id="output" class="analysis-output">Record a performance, then analyze it for pitch feedback.</p>
     </section>
   </main>
 
-  <script type="module" src="script.js"></script>
+  <script type="module" src="script.js?v=20261027-controls"></script>
 </body>
 </html>
