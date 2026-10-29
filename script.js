@@ -31,6 +31,34 @@ let audioChunks = [];
 recordBtn.addEventListener("click", startRecording);
 stopBtn.addEventListener("click", stopRecording);
 let ctx = new AudioContext();
+// Recorded Yamaha C5 samples from the Salamander Grand Piano library. The
+// closest recorded pitch is used for each MIDI note, then gently retuned with
+// playbackRate. This keeps the scheduling accuracy of Web Audio while giving
+// the practice track a real piano sound.
+const pianoSampleBaseUrl = "assets/piano/";
+const pianoSampleFiles = {
+  A0: "A0.mp3", C1: "C1.mp3", "D#1": "Ds1.mp3", "F#1": "Fs1.mp3",
+  A1: "A1.mp3", C2: "C2.mp3", "D#2": "Ds2.mp3", "F#2": "Fs2.mp3",
+  A2: "A2.mp3", C3: "C3.mp3", "D#3": "Ds3.mp3", "F#3": "Fs3.mp3",
+  A3: "A3.mp3", C4: "C4.mp3", "D#4": "Ds4.mp3", "F#4": "Fs4.mp3",
+  A4: "A4.mp3", C5: "C5.mp3", "D#5": "Ds5.mp3", "F#5": "Fs5.mp3",
+  A5: "A5.mp3", C6: "C6.mp3", "D#6": "Ds6.mp3", "F#6": "Fs6.mp3",
+  A6: "A6.mp3", C7: "C7.mp3"
+};
+const pianoBuffers = new Map();
+const pianoSampleRoots = Object.keys(pianoSampleFiles).map((note) => ({
+  note,
+  midi: Math.round(Frequency(note).toMidi())
+}));
+
+const pianoSamplesReady = Promise.all(Object.entries(pianoSampleFiles).map(async ([note, file]) => {
+  const response = await fetch(`${pianoSampleBaseUrl}${file}`);
+  if (!response.ok) throw new Error(`Could not load piano sample ${file}.`);
+  pianoBuffers.set(note, await ctx.decodeAudioData(await response.arrayBuffer()));
+})).catch((error) => {
+  console.error("Bundled piano samples could not be loaded.", error);
+  pianoBuffers.clear();
+});
 let metInterval;
 let nextMetronomeClickTime = 0;
 let nextMetronomeBeat = 0;
@@ -84,7 +112,7 @@ let currentScoreInstance = null;
 let scoreSegmentPositions = null;
 let scoreNoteAnchors = [];
 let scoreGuideTimeline = [];
-let practiceOscillators = [];
+let activePracticeSources = [];
 let practiceTrackStopTimer = null;
 let practiceTrackLoopId = 0;
 let recordWithTrack = true;
@@ -1888,42 +1916,44 @@ function stopMet() {
 }
 
 function playPianoNoteAt(noteName, startTime, duration = 1, volume = 0.14) {
-  const output = ctx.createGain();
-  const releaseTime = Math.max(0.18, duration);
-  output.connect(ctx.destination);
-  output.gain.setValueAtTime(0.0001, startTime);
-  output.gain.exponentialRampToValueAtTime(volume, startTime + 0.012);
-  output.gain.exponentialRampToValueAtTime(Math.max(0.0001, volume * 0.18), startTime + Math.min(0.35, releaseTime * 0.28));
-  output.gain.exponentialRampToValueAtTime(0.0001, startTime + releaseTime);
+  if (pianoBuffers.size === 0) return null;
 
-  const harmonics = [[1, 1], [2, 0.42], [3, 0.2], [4, 0.08]];
-  return harmonics.map(([multiple, level]) => {
-    const oscillator = ctx.createOscillator();
-    const harmonicGain = ctx.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.value = Frequency(noteName).toFrequency() * multiple;
-    harmonicGain.gain.value = level;
-    oscillator.connect(harmonicGain);
-    harmonicGain.connect(output);
-    oscillator.start(startTime);
-    oscillator.stop(startTime + releaseTime + 0.03);
-    return oscillator;
-  });
+  const targetMidi = Math.round(Frequency(noteName).toMidi());
+  const nearestRoot = pianoSampleRoots.reduce((closest, candidate) => (
+    Math.abs(candidate.midi - targetMidi) < Math.abs(closest.midi - targetMidi) ? candidate : closest
+  ));
+  const buffer = pianoBuffers.get(nearestRoot.note);
+  if (!buffer) return null;
+
+  const source = ctx.createBufferSource();
+  const gain = ctx.createGain();
+  const releaseDuration = Math.min(0.8, Math.max(0.18, duration * 0.32));
+  const releaseStart = startTime + Math.max(0.05, duration);
+  source.buffer = buffer;
+  source.playbackRate.value = 2 ** ((targetMidi - nearestRoot.midi) / 12);
+  source.connect(gain);
+  gain.connect(ctx.destination);
+  gain.gain.setValueAtTime(0.0001, startTime);
+  gain.gain.exponentialRampToValueAtTime(volume, startTime + 0.012);
+  gain.gain.setValueAtTime(volume, releaseStart);
+  gain.gain.exponentialRampToValueAtTime(0.0001, releaseStart + releaseDuration);
+  source.start(startTime);
+  source.stop(releaseStart + releaseDuration + 0.03);
+  return source;
 }
 
 function playPracticeNoteAt(noteName, startTime, duration) {
-  const oscillators = playPianoNoteAt(noteName, startTime, duration, 0.12);
-  practiceOscillators.push(...oscillators);
-  oscillators.forEach((oscillator) => {
-    oscillator.onended = () => {
-      practiceOscillators = practiceOscillators.filter((item) => item !== oscillator);
-    };
-  });
+  const source = playPianoNoteAt(noteName, startTime, duration, 0.12);
+  if (!source) return;
+  activePracticeSources.push(source);
+  source.onended = () => {
+    activePracticeSources = activePracticeSources.filter((item) => item !== source);
+  };
 }
 
 function finishPracticeTrack() {
   practiceTrackStopTimer = null;
-  practiceOscillators = [];
+  activePracticeSources = [];
   playPracticeTrackBtn.disabled = midiNotesData === null || midiNotesData.length === 0;
   stopPracticeTrackBtn.disabled = true;
   stopMet();
@@ -1956,6 +1986,13 @@ async function startPracticeTrack() {
 
   stopPracticeTrack();
   if (ctx.state === "suspended") await ctx.resume();
+  playPracticeTrackBtn.disabled = true;
+  await pianoSamplesReady;
+  if (pianoBuffers.size === 0) {
+    alert("The piano samples could not be loaded. Please check your connection and try again.");
+    playPracticeTrackBtn.disabled = false;
+    return;
+  }
 
   const bpm = getCurrentBpm();
   const startTime = ctx.currentTime + 0.08;
@@ -1963,7 +2000,6 @@ async function startPracticeTrack() {
   nextMetronomeClickTime = startTime;
   startMet({ guideStartTime: startTime, guideRange: activeLoopRange, guideLoop: Boolean(activeLoopRange) });
 
-  playPracticeTrackBtn.disabled = true;
   stopPracticeTrackBtn.disabled = false;
   if (!activeLoopRange) {
     const trackEnd = schedulePracticeRange(null, bpm, startTime);
@@ -1991,11 +2027,11 @@ function stopPracticeTrack() {
     practiceTrackStopTimer = null;
   }
 
-  practiceOscillators.forEach((oscillator) => {
+  activePracticeSources.forEach((source) => {
     try {
-      oscillator.stop(ctx.currentTime);
+      source.stop(ctx.currentTime);
     } catch (error) {
-      // The oscillator may already have finished naturally.
+      // The sample may already have finished naturally.
     }
   });
   finishPracticeTrack();
