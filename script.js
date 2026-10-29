@@ -521,6 +521,16 @@ function getScoreNoteAnchors() {
 
         // Convert the rendered noteheads back into SVG coordinates. This respects
         // the actual sheet width, responsive scaling, and MuseScore's transforms.
+        const toSvgBounds = (rect) => ({
+            x: viewBox.x + (rect.left - pageRect.left) * viewBox.width / pageRect.width,
+            y: viewBox.y + (rect.top - pageRect.top) * viewBox.height / pageRect.height,
+            width: rect.width * viewBox.width / pageRect.width,
+            height: rect.height * viewBox.height / pageRect.height
+        });
+        const staffLines = [...page.querySelectorAll(".StaffLines, .stafflines")]
+            .map((staff) => toSvgBounds(staff.getBoundingClientRect()))
+            .filter((staff) => staff.width > 0 && staff.height > 0);
+
         const noteheads = [...page.querySelectorAll(".Note")].map((notehead) => {
             const rect = notehead.getBoundingClientRect();
             return {
@@ -548,6 +558,8 @@ function getScoreNoteAnchors() {
         systems
             .sort((a, b) => a.centerY - b.centerY)
             .forEach((system) => {
+                const systemTop = Math.min(...system.anchors.map((anchor) => anchor.y));
+                const systemBottom = Math.max(...system.anchors.map((anchor) => anchor.y + anchor.sy));
                 const onsets = [];
                 for (const anchor of system.anchors.sort((a, b) => a.x - b.x)) {
                     const previous = onsets.at(-1);
@@ -559,7 +571,21 @@ function getScoreNoteAnchors() {
                         previous.x = Math.min(previous.x, anchor.x);
                         previous.sx = Math.max(previous.sx, anchor.sx);
                     } else {
-                        onsets.push({ ...anchor });
+                        // MuseScore's StaffLines element gives the exact vertical
+                        // bounds of the active staff. Fall back to the note system
+                        // when a score format omits that SVG class.
+                        const staff = staffLines.find((candidate) =>
+                            anchor.x >= candidate.x - 24 &&
+                            anchor.x <= candidate.x + candidate.width + 24 &&
+                            anchor.y >= candidate.y - 100 &&
+                            anchor.y <= candidate.y + candidate.height + 100
+                        );
+                        const overhang = 12;
+                        onsets.push({
+                            ...anchor,
+                            guideTop: (staff?.y ?? systemTop - 48) - overhang,
+                            guideBottom: (staff ? staff.y + staff.height : systemBottom + 48) + overhang
+                        });
                     }
                 }
                 anchors.push(...onsets);
@@ -1717,7 +1743,12 @@ function getGuidePosition(beat) {
 
   // Move only when the active note changes; the cursor stays at the notehead's
   // left edge for the whole note instead of drifting across unevenly spaced music.
-  return { page: current.anchor.page, x: current.anchor.x };
+  return {
+    page: current.anchor.page,
+    x: current.anchor.x,
+    top: current.anchor.guideTop,
+    bottom: current.anchor.guideBottom
+  };
 }
 
 function startScoreGuide(startTime, bpm, range = null, loop = true) {
@@ -1754,14 +1785,14 @@ function startScoreGuide(startTime, bpm, range = null, loop = true) {
           guide.classList.add("metronome-guide");
           guide.setAttribute("aria-hidden", "true");
           const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-          const viewBox = page.viewBox.baseVal;
-          line.setAttribute("y1", "0");
-          line.setAttribute("y2", String(viewBox.height || page.clientHeight));
           guide.appendChild(line);
           page.appendChild(guide);
         }
-        guide.querySelector("line").setAttribute("x1", String(position.x));
-        guide.querySelector("line").setAttribute("x2", String(position.x));
+        const line = guide.querySelector("line");
+        line.setAttribute("x1", String(position.x));
+        line.setAttribute("x2", String(position.x));
+        line.setAttribute("y1", String(position.top));
+        line.setAttribute("y2", String(position.bottom));
       }
     }
     scoreGuideFrame = requestAnimationFrame(updateGuide);
