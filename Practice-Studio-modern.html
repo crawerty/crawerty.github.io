@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" type="image/png" href="tabCover2.png" />
-  <link rel="stylesheet" href="style-modern.css?v=20261027-controls" />
+  <link rel="stylesheet" href="style-modern.css?v=20261029-refresh" />
   <title>OnSight Music — Practice Studio</title>
 </head>
 <body>
@@ -22,7 +22,7 @@
   <main>
     <section class="intro">
       <p class="eyebrow">OnSight Music</p>
-      <h1>Practice Studio</h1>
+      <h1>Practice Studio<sup aria-label="trademark">™</sup></h1>
       <p>Upload a score, set your pace, and practice with a clear visual and audio guide.</p>
     </section>
 
@@ -153,6 +153,21 @@
     <p class="sample-credit">Piano audio: <a href="https://archive.org/details/SalamanderGrandPianoV3">Salamander Grand Piano V3</a> by Alexander Holm, licensed under <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>.</p>
   </main>
 
-  <script type="module" src="script.js?v=20261029-local-piano"></script>
+  <dialog id="recordingTips" class="tips-dialog" aria-labelledby="recordingTipsTitle">
+    <div class="tips-dialog__content">
+      <p class="eyebrow">Before you record</p>
+      <h2 id="recordingTipsTitle">Tips for a clear recording</h2>
+      <ol>
+        <li>Headphones are not recommended for this practice session.</li>
+        <li>Choose a quiet environment and silence nearby notifications or devices.</li>
+        <li>Keep the practice-track volume low enough that it does not bleed into your microphone.</li>
+        <li>Disable automatic noise suppression, echo cancellation, and automatic gain control when your device offers those settings.</li>
+        <li>Place your microphone about 6–12 inches from your mouth and make a short test recording first.</li>
+      </ol>
+      <button id="dismissRecordingTips" type="button">Got it — I’m ready</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="script.js?v=20261029-recording-tips"></script>
 </body>
 </html>

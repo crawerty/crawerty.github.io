@@ -26,6 +26,8 @@ const WTrackBtn = document.getElementById("WTrack");
 const WOTrackBtn = document.getElementById("WOTrack");
 const recordingHint = document.getElementById("recordingHint");
 const uploadRequired = document.getElementById("uploadRequired");
+const recordingTips = document.getElementById("recordingTips");
+const dismissRecordingTips = document.getElementById("dismissRecordingTips");
 let recorder;
 let audioChunks = [];
 recordBtn.addEventListener("click", startRecording);
@@ -101,6 +103,7 @@ WOTrackBtn?.addEventListener("click", () => setRecordingMode(false));
 metronomeVolumeInput?.addEventListener("input", updateMetronomeVolumeLabel);
 displayKeySelect?.addEventListener("change", updateDisplayKey);
 displayClefSelect?.addEventListener("change", updateDisplayKey);
+dismissRecordingTips?.addEventListener("click", () => recordingTips.close());
 let midiBpm = null;
 let recordingBpm = null;
 let activeLoopRange = null;
@@ -1553,13 +1556,13 @@ async function convertAllNotes() {
 
 async function processAndRender() {
   const file = document.getElementById("midiFile").files[0];
-  if (!file) return;
+  if (!file) return false;
 
   const [parsedMidi, midiData] = await Promise.all([
     parseMidiFile(),
     file.arrayBuffer().then((buffer) => new Uint8Array(buffer))
   ]);
-  if (!parsedMidi) return;
+  if (!parsedMidi) return false;
 
   const { bpm, notes, timeSignatures, keyFifths, trackName } = parsedMidi;
   midiBpm = bpm;
@@ -1586,6 +1589,7 @@ async function processAndRender() {
       ? `Showing the score with ${selectedKey}.`
       : "The selected key could not be applied. Please try another MIDI file.";
   }
+  return notes.length > 0;
 }
 
 async function renderCurrentScore() {
@@ -2056,10 +2060,10 @@ function startRecording() {
 
     navigator.mediaDevices.getUserMedia({
         audio: {
-            autoGainControl: true,
+            autoGainControl: false,
             channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true
+            echoCancellation: false,
+            noiseSuppression: false
         }
     })
         .then(stream => {
@@ -2151,5 +2155,6 @@ analyzeOutput.addEventListener("click", compareNotes);
 
 document.getElementById("midiFile").addEventListener("change", async () => {
   console.log("File selected! Processing as we speak...");
-  await processAndRender();
+  const loaded = await processAndRender();
+  if (loaded && recordingTips && !recordingTips.open) recordingTips.showModal();
 });

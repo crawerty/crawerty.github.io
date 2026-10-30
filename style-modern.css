@@ -64,6 +64,7 @@ main { margin: 0 auto; max-width: 1440px; padding: 48px clamp(20px, 5vw, 72px) 7
 
 h1, h2, p { margin-top: 0; }
 h1 { font-size: clamp(2.2rem, 5vw, 3.5rem); letter-spacing: -0.04em; line-height: 1; margin-bottom: 16px; }
+h1 sup { font-size: .34em; letter-spacing: 0; margin-left: .08em; vertical-align: top; }
 h2 { font-size: 1.1rem; letter-spacing: -0.01em; margin-bottom: 14px; }
 .intro > p:last-child, .hint, .status-text, .analysis-output { color: var(--muted); }
 
@@ -232,6 +233,12 @@ audio { display: block; margin-top: 16px; max-width: 100%; width: 100%; }
 .sheet-music-error { color: var(--red); }
 .sample-credit { color: var(--muted); font-size: .75rem; margin: 28px 0 8px; text-align: center; }
 .sample-credit a { color: inherit; }
+.tips-dialog { background: transparent; border: 0; max-width: min(92vw, 540px); padding: 0; }
+.tips-dialog::backdrop { background: rgba(23, 43, 77, .58); }
+.tips-dialog__content { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 24px 72px rgba(24, 34, 53, .28); padding: clamp(24px, 5vw, 38px); }
+.tips-dialog h2 { font-size: 1.7rem; margin-bottom: 16px; }
+.tips-dialog ol { color: var(--ink); margin: 0 0 24px; padding-left: 1.4rem; }
+.tips-dialog li + li { margin-top: 11px; }
 
 @media (max-width: 1060px) {
   .practice-console { grid-template-columns: 1fr 1fr; }
