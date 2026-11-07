@@ -118,6 +118,7 @@ let scoreGuideTimeline = [];
 let activePracticeSources = [];
 let practiceTrackStopTimer = null;
 let practiceTrackLoopId = 0;
+let recordingAutoStopTimer = null;
 let recordWithTrack = true;
 let scoreGuideFrame = null;
 let scoreGuideStartTime = 0;
@@ -195,6 +196,7 @@ async function renderMuseScore(midiData, displayMusicXml = null) {
       page.innerHTML = svgString;
       container.appendChild(page);
     });
+    container.querySelectorAll("svg").forEach(trimMuseScorePageWhitespace);
     scoreNoteAnchors = getScoreNoteAnchors();
     scoreGuideTimeline = getScoreGuideTimeline(scoreNoteAnchors);
     return true;
@@ -203,6 +205,41 @@ async function renderMuseScore(midiData, displayMusicXml = null) {
     container.innerHTML = "<p class=\"sheet-music-error\">Could not convert this MIDI file into sheet music.</p>";
     return false;
   }
+}
+
+function trimMuseScorePageWhitespace(svg) {
+  const viewBox = svg.viewBox?.baseVal;
+  const pageRect = svg.getBoundingClientRect();
+  if (!viewBox || !pageRect.width || !pageRect.height) return;
+
+  // MuseScore exports a full paper-sized SVG. Build a bounding box from its
+  // musical marks rather than the white page rectangle, then retain a small
+  // visual margin so accidentals, dynamics, and staff lines are never clipped.
+  const marks = [...svg.querySelectorAll("path, text, use, line, polyline, polygon, circle, ellipse")];
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+
+  marks.forEach((mark) => {
+    const rect = mark.getBoundingClientRect();
+    if (!rect.width && !rect.height) return;
+
+    left = Math.min(left, viewBox.x + (rect.left - pageRect.left) * viewBox.width / pageRect.width);
+    top = Math.min(top, viewBox.y + (rect.top - pageRect.top) * viewBox.height / pageRect.height);
+    right = Math.max(right, viewBox.x + (rect.right - pageRect.left) * viewBox.width / pageRect.width);
+    bottom = Math.max(bottom, viewBox.y + (rect.bottom - pageRect.top) * viewBox.height / pageRect.height);
+  });
+
+  if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return;
+
+  const horizontalPadding = 6;
+  const verticalPadding = 10;
+  const croppedLeft = Math.max(viewBox.x, left - horizontalPadding);
+  const croppedTop = Math.max(viewBox.y, top - verticalPadding);
+  const croppedRight = Math.min(viewBox.x + viewBox.width, right + horizontalPadding);
+  const croppedBottom = Math.min(viewBox.y + viewBox.height, bottom + verticalPadding);
+  svg.setAttribute("viewBox", `${croppedLeft} ${croppedTop} ${croppedRight - croppedLeft} ${croppedBottom - croppedTop}`);
 }
 
 function getMeasureQuarterBeats(timeSignature) {
@@ -2050,6 +2087,23 @@ function playStartingNote(noteName, duration = 2.5) {
   playStartingNoteAt(noteName, ctx.currentTime, duration);
 }
 
+function scheduleRecordingAutoStop(bpm) {
+  if (recordingAutoStopTimer) clearTimeout(recordingAutoStopTimer);
+
+  const notes = getNotesInRange(null, bpm);
+  if (notes.length === 0) return;
+
+  const finalBeat = Math.max(...notes.map((note) => note.startBeat + note.durationBeats));
+  const finalMeasure = getTimeSignatureAtBeat(Math.max(0, finalBeat - 0.001));
+  const restBeats = getMeasureQuarterBeats(finalMeasure) / 4;
+  const millisecondsUntilStop = (finalBeat + restBeats) * (60 / bpm) * 1000 + 150;
+
+  recordingAutoStopTimer = setTimeout(() => {
+    recordingAutoStopTimer = null;
+    stopRecording();
+  }, millisecondsUntilStop);
+}
+
 function startRecording() {
     if (midiNotesData === null) {
         alert("Please upload a MIDI file before recording.");
@@ -2134,12 +2188,19 @@ function startRecording() {
                 } else {
                   startMet({ guideRange: recordingLoopRange, guideLoop: true });
                 }
+                // A selected loop intentionally keeps repeating until the user stops it.
+                // Full-score takes end after a quarter-measure of quiet recording time.
+                if (!recordingLoopRange) scheduleRecordingAutoStop(bpm);
                 }, count * secondsPerBeat * 1000);
             }, 3050);
         });
 }
 
 function stopRecording() {
+    if (recordingAutoStopTimer) {
+        clearTimeout(recordingAutoStopTimer);
+        recordingAutoStopTimer = null;
+    }
     stopPracticeTrack();
     if (recorder && recorder.state !== "inactive") recorder.stop();
     recordBtn.disabled = false;
